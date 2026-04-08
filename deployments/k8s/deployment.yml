@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omura-backend
+  labels:
+    app: omura-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: omura-backend
+  template:
+    metadata:
+      labels:
+        app: omura-backend
+    spec:
+      containers:
+        - name: backend
+          image: omura-backend:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: omura-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omura-backend-svc
+spec:
+  selector:
+    app: omura-backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omura-frontend
+  labels:
+    app: omura-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: omura-frontend
+  template:
+    metadata:
+      labels:
+        app: omura-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: omura-frontend:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              value: "http://omura-backend-svc:8000"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omura-frontend-svc
+spec:
+  selector:
+    app: omura-frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: LoadBalancer

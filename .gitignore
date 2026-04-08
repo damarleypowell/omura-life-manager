@@ -1,0 +1,46 @@
+# Environment — NEVER commit secrets
+.env
+.env.*
+*.env.local
+backend/.env
+backend/.env.*
+
+# OAuth tokens & encrypted credentials
+backend/data/
+data/tokens/
+*.token
+
+# Secrets & keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3

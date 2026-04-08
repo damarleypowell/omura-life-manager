@@ -1060,7 +1060,18 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
 
         for key, query_fn in queries.items():
             try:
-                state[key] = query_fn()
+                rows = query_fn()
+                # Detach ORM objects so cached state survives session close
+                if isinstance(rows, list):
+                    state[key] = [
+                        {c.name: getattr(r, c.name, None) for c in r.__table__.columns}
+                        if hasattr(r, '__table__') else r
+                        for r in rows
+                    ]
+                elif hasattr(rows, '__table__'):
+                    state[key] = {c.name: getattr(rows, c.name, None) for c in rows.__table__.columns}
+                else:
+                    state[key] = rows
             except Exception as exc:
                 self.logger.warning(f"Failed to load {key}: {exc}")
                 state[key] = [] if key != "kpi_summary" else {}

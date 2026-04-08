@@ -322,10 +322,28 @@ export default function ChatInterface() {
 
   return (
     <>
-      {/* Floating toggle button */}
+      {/* Chat panel */}
+      {open && (
+        <div className="fixed bottom-28 right-6 z-[9998] w-[400px] h-[36rem]
+          bg-[#08090F]/95 backdrop-blur-2xl border border-white/[0.06]
+          rounded-3xl shadow-[0_16px_60px_rgba(0,0,0,0.5)] overflow-hidden
+          animate-slide-up">
+          {activeConv ? (
+            <ConversationChat conv={activeConv} onBack={handleBack} />
+          ) : (
+            <ConversationList
+              key={listKey}
+              onSelect={handleSelectConversation}
+              onNew={handleNewConversation}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Floating toggle button — always on top */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-2xl gradient-blue-purple
+        className="fixed bottom-6 right-6 z-[9999] w-14 h-14 rounded-2xl gradient-blue-purple
           flex items-center justify-center
           shadow-[0_0_30px_rgba(59,130,246,0.25)]
           hover:shadow-[0_0_40px_rgba(59,130,246,0.4)]
@@ -343,24 +361,6 @@ export default function ChatInterface() {
           </svg>
         )}
       </button>
-
-      {/* Chat panel */}
-      {open && (
-        <div className="fixed bottom-24 right-6 z-50 w-[400px] h-[36rem]
-          bg-[#08090F]/95 backdrop-blur-2xl border border-white/[0.06]
-          rounded-3xl shadow-[0_16px_60px_rgba(0,0,0,0.5)] overflow-hidden
-          animate-slide-up">
-          {activeConv ? (
-            <ConversationChat conv={activeConv} onBack={handleBack} />
-          ) : (
-            <ConversationList
-              key={listKey}
-              onSelect={handleSelectConversation}
-              onNew={handleNewConversation}
-            />
-          )}
-        </div>
-      )}
     </>
   );
 }

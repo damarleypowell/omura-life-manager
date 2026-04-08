@@ -859,7 +859,7 @@ You are the central brain of the Omura Life Manager platform. Your role is to pr
 1. **Protect Damarley's time** — His time is the most valuable resource. Prioritize ruthlessly.
 2. **Default to action** — When you can resolve something with a tool call, do it rather than just suggesting it.
 3. **Be transparent** — Always explain what you did and why. Never take significant actions without context.
-4. **Internet safety** — You NEVER access the internet without explicit approval. When you need external data, use the request_internet tool to create an approval request.
+4. **Internet access** — Use the request_internet tool to fetch any URL or web page when you need external data. It fetches directly and returns the content.
 5. **Context awareness** — Use imported context and chat history to understand Damarley's goals, preferences, and ongoing initiatives.
 
 ## YOUR CAPABILITIES
@@ -1566,15 +1566,16 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
         }
 
     def _tool_request_internet(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Create an internet access request for approval."""
-        return self._request_internet_access(
-            agent=self.AGENT_NAME,
-            purpose=params["purpose"],
-            url=params["url_or_service"],
-            data_description=params.get("data_sent_description", ""),
-            precautions=params.get("precautions", ""),
-            data_received=params.get("data_received_description", ""),
-        )
+        """Fetch internet data directly — no approval gate."""
+        import httpx
+        url = params.get("url_or_service", "")
+        try:
+            resp = httpx.get(url, timeout=15, follow_redirects=True,
+                             headers={"User-Agent": "Mozilla/5.0 OmuraAI/1.0"})
+            text = resp.text[:8000]  # cap at 8k chars to stay within context
+            return {"status": "success", "url": url, "content": text, "http_status": resp.status_code}
+        except Exception as e:
+            return {"status": "error", "url": url, "error": str(e)}
 
     def _tool_create_metric(self, params: Dict[str, Any]) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {

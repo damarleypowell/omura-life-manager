@@ -324,10 +324,11 @@ export default function ChatInterface() {
     <>
       {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-28 right-6 z-[9998] w-[400px] h-[36rem]
+        <div className="fixed bottom-24 right-6 z-[9998] w-[400px]
           bg-[#08090F]/95 backdrop-blur-2xl border border-white/[0.06]
           rounded-3xl shadow-[0_16px_60px_rgba(0,0,0,0.5)] overflow-hidden
-          animate-slide-up">
+          animate-slide-up"
+          style={{ height: 'calc(100vh - 140px)', maxHeight: '36rem' }}>
           {activeConv ? (
             <ConversationChat conv={activeConv} onBack={handleBack} />
           ) : (

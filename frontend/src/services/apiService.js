@@ -5,10 +5,8 @@
 
 import axios from 'axios';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8003';
-
+// Use relative URLs — Next.js rewrites in next.config.js proxy /api/* to the backend
 const api = axios.create({
-  baseURL: API_BASE,
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });

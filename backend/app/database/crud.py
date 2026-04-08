@@ -21,11 +21,15 @@ from backend.app.database.session import get_redis
 
 def create_record(db: Session, model_class, **kwargs):
     """Create a new record of any model type."""
-    record = model_class(**kwargs)
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return record
+    try:
+        record = model_class(**kwargs)
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record
+    except Exception:
+        db.rollback()
+        raise
 
 
 def get_record(db: Session, model_class, record_id: int):
@@ -238,13 +242,22 @@ def log_agent_action(db: Session, agent_name: str, action: str,
                      input_data: dict = None, output_data: dict = None,
                      status: str = "success", error_message: str = None,
                      duration_ms: int = None):
-    return create_record(
-        db, AgentLog,
-        agent_name=agent_name, action=action,
-        input_data=input_data, output_data=output_data,
-        status=status, error_message=error_message,
-        duration_ms=duration_ms
-    )
+    # Always rollback any aborted transaction before attempting a log write,
+    # so a failed query earlier in the same request can't block logging.
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    try:
+        return create_record(
+            db, AgentLog,
+            agent_name=agent_name, action=action,
+            input_data=input_data, output_data=output_data,
+            status=status, error_message=error_message,
+            duration_ms=duration_ms
+        )
+    except Exception:
+        pass  # logging must never crash the caller
 
 
 def get_agent_logs(db: Session, agent_name: str = None, limit: int = 100):

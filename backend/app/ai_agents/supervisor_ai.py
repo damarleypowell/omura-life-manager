@@ -604,10 +604,14 @@ class SupervisorAI:
     """
 
     AGENT_NAME = "supervisor"
-    MODEL = "claude-sonnet-4-6"
-    MAX_CONTEXT_MESSAGES = 50
-    MAX_IMPORTED_CONTEXT_ITEMS = 30
-    MAX_TOOL_ITERATIONS = 15
+    MODEL = "claude-haiku-4-5-20251001"
+    MAX_CONTEXT_MESSAGES = 20
+    MAX_IMPORTED_CONTEXT_ITEMS = 15
+    MAX_TOOL_ITERATIONS = 10
+
+    _state_cache = None
+    _state_cache_time = 0
+    STATE_CACHE_TTL = 60  # seconds
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -675,7 +679,7 @@ class SupervisorAI:
 
                 response = self.client.messages.create(
                     model=self.MODEL,
-                    max_tokens=4096,
+                    max_tokens=2048,
                     system=system_prompt,
                     tools=SUPERVISOR_TOOLS,
                     messages=messages,
@@ -1031,12 +1035,12 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
 
     def _get_current_state(self) -> Dict[str, Any]:
         """Query the database for a comprehensive snapshot of current state.
-
-        Returns
-        -------
-        dict
-            All the key operational data needed for the system prompt.
+        Cached for 60 seconds to avoid hammering the DB on every message.
         """
+        now = time.time()
+        if SupervisorAI._state_cache and (now - SupervisorAI._state_cache_time) < self.STATE_CACHE_TTL:
+            return SupervisorAI._state_cache
+
         state: Dict[str, Any] = {}
 
         queries = {
@@ -1061,6 +1065,8 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
                 self.logger.warning(f"Failed to load {key}: {exc}")
                 state[key] = [] if key != "kpi_summary" else {}
 
+        SupervisorAI._state_cache = state
+        SupervisorAI._state_cache_time = time.time()
         return state
 
     # ------------------------------------------------------------------

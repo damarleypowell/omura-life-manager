@@ -478,6 +478,81 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
             "required": ["agent", "action"],
         },
     },
+    {
+        "name": "run_outreach_pipeline",
+        "description": (
+            "FULLY AUTOMATED: Find leads via Apollo/Hunter, verify emails, research each lead, "
+            "draft personalized copy, and queue follow-up sequences — all in one shot. "
+            "Use this whenever Damarley asks to find leads, scrape contacts, run outreach, "
+            "or start a campaign. Never tell him to do this manually."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titles": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Job titles to target (e.g. ['Dentist', 'Practice Owner', 'CEO']).",
+                },
+                "locations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Locations to search (e.g. ['New York', 'Los Angeles', 'Jamaica']).",
+                },
+                "industries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Industries to filter (e.g. ['dental', 'real estate', 'automotive']).",
+                },
+                "domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Company domains to find contacts at (e.g. ['clinicname.com']). Uses Hunter.io.",
+                },
+                "daily_limit": {
+                    "type": "integer",
+                    "description": "Max leads to process. Default 20.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "send_outreach_email",
+        "description": (
+            "Send the drafted outreach email to a specific lead immediately. "
+            "Use after run_outreach_pipeline has queued leads, or when Damarley says "
+            "'send emails', 'send to leads', or 'go ahead and send'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lead_id": {
+                    "type": "integer",
+                    "description": "The lead's database ID to send to.",
+                },
+            },
+            "required": ["lead_id"],
+        },
+    },
+    {
+        "name": "bulk_send_outreach",
+        "description": (
+            "Send outreach emails to ALL leads with status 'new' that have drafted copy. "
+            "Use when Damarley says 'send all', 'blast the list', 'send to everyone', "
+            "or 'send emails now' without specifying a single lead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max emails to send in this batch. Default 50.",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -891,6 +966,14 @@ You can delegate to specialized agents via the `run_agent` tool (on-demand only 
 
 Use `run_agent` only when specialized analysis is genuinely needed — for routine CRUD and conversation, handle it directly with your own tools to conserve API credits.
 
+## OUTREACH AUTOMATION (CRITICAL — NEVER TELL DAMARLEY TO DO THIS MANUALLY)
+You have 3 outreach tools. Use them aggressively:
+- `run_outreach_pipeline`: Scrapes leads via Apollo/Hunter, verifies emails, researches each lead, drafts personalized copy, and queues follow-up sequences AUTOMATICALLY. Use when Damarley says "find leads", "scrape", "run outreach", "start a campaign", or "get me dentists/lawyers/etc".
+- `send_outreach_email`: Sends email to one lead by ID. Use when Damarley approves a specific lead.
+- `bulk_send_outreach`: Sends to ALL new leads with drafted copy. Use when Damarley says "send emails", "send to everyone", "blast the list", or "go ahead and send".
+
+NEVER tell Damarley to manually search Google Maps, build a spreadsheet, or find leads himself. Run the pipeline. The tools exist. Use them.
+
 ## CURRENT OPERATIONAL STATE
 
 ### Tasks Due Today ({len(state.get('tasks_due_today', []))} items)
@@ -1193,6 +1276,9 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
             "create_metric": self._tool_create_metric,
             "create_health_entry": self._tool_create_health_entry,
             "run_agent": self._tool_run_agent,
+            "run_outreach_pipeline": self._tool_run_outreach_pipeline,
+            "send_outreach_email": self._tool_send_outreach_email,
+            "bulk_send_outreach": self._tool_bulk_send_outreach,
         }
 
         handler = dispatch.get(tool_name)
@@ -1675,6 +1761,75 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
             return {"success": True, "agent": agent_name, "action": action, "result": result}
         except Exception as exc:
             self.logger.error(f"Agent delegation failed: {agent_name}.{action}", error=str(exc))
+            return {"success": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Outreach pipeline tools
+    # ------------------------------------------------------------------
+
+    def _tool_run_outreach_pipeline(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the full outreach pipeline: scrape → verify → research → draft → queue."""
+        from backend.app.ai_agents.outreach_ai import OutreachAI
+        try:
+            agent = OutreachAI(self.db)
+            result = agent.run_pipeline(
+                titles=params.get("titles"),
+                locations=params.get("locations"),
+                industries=params.get("industries"),
+                domains=params.get("domains"),
+                daily_limit=params.get("daily_limit", 20),
+            )
+            crud.log_agent_action(self.db, "supervisor", "tool:run_outreach_pipeline", params, result, "success")
+            return {"success": True, **result}
+        except Exception as exc:
+            self.logger.error(f"run_outreach_pipeline failed: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    def _tool_send_outreach_email(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Send outreach email to a single lead by ID."""
+        from backend.app.ai_agents.outreach_ai import OutreachAI
+        lead_id = params.get("lead_id")
+        if not lead_id:
+            return {"success": False, "error": "lead_id is required"}
+        try:
+            agent = OutreachAI(self.db)
+            result = agent.send_initial_outreach(lead_id)
+            crud.log_agent_action(self.db, "supervisor", "tool:send_outreach_email", params, result, "success")
+            return {"success": True, **result}
+        except Exception as exc:
+            self.logger.error(f"send_outreach_email failed: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    def _tool_bulk_send_outreach(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Send outreach emails to all new leads that have drafted copy."""
+        from backend.app.ai_agents.outreach_ai import OutreachAI
+        from backend.app.database.models import Lead, LeadStatus
+        limit = params.get("limit", 50)
+        try:
+            leads = (
+                self.db.query(Lead)
+                .filter(Lead.status == LeadStatus.NEW, Lead.notes.ilike("%[OUTREACH COPY]%"))
+                .limit(limit)
+                .all()
+            )
+            if not leads:
+                return {"success": True, "sent": 0, "message": "No leads with drafted copy found. Run the outreach pipeline first."}
+
+            agent = OutreachAI(self.db)
+            sent = 0
+            failed = 0
+            for lead in leads:
+                try:
+                    agent.send_initial_outreach(lead.id)
+                    sent += 1
+                except Exception:
+                    failed += 1
+
+            result = {"sent": sent, "failed": failed, "total_leads": len(leads)}
+            crud.log_agent_action(self.db, "supervisor", "tool:bulk_send_outreach", params, result, "success")
+            return {"success": True, **result}
+        except Exception as exc:
+            self.logger.error(f"bulk_send_outreach failed: {exc}")
             return {"success": False, "error": str(exc)}
 
     # ------------------------------------------------------------------

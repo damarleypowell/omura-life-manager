@@ -890,7 +890,7 @@ def google_auth_callback(code: str, db: Session = Depends(get_db)):
     crud.log_agent_action(db, "system", "google_oauth_connected", status="success")
 
     # Redirect back to dashboard with success flag
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3001")
+    frontend_url = _os.environ.get("FRONTEND_URL", "http://localhost:3001")
     return RedirectResponse(f"{frontend_url}/?google_connected=1")
 
 @app.get("/auth/google/status")
@@ -1458,14 +1458,20 @@ def send_initial_outreach(lead_id: int, db: Session = Depends(get_db)):
     return agent.send_initial_outreach(lead_id)
 
 
+class ResearchLeadRequest(BaseModel):
+    email: str = ""
+    name: str = ""
+    company: str = ""
+    website: str = ""
+
 @app.post("/api/outreach/research")
-def research_lead_endpoint(data: dict, db: Session = Depends(get_db)):
+def research_lead_endpoint(data: ResearchLeadRequest, db: Session = Depends(get_db)):
     """Research a single lead and draft personalized outreach copy."""
     from backend.app.ai_agents.outreach_ai import research_lead, draft_outreach_copy, verify_email
-    email = data.get("email", "")
-    name = data.get("name", "")
-    company = data.get("company", "")
-    website = data.get("website", "")
+    email = data.email
+    name = data.name
+    company = data.company
+    website = data.website
 
     verification = verify_email(email)
     research = research_lead(name, company, email, website)

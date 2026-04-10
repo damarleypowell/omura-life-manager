@@ -1213,7 +1213,7 @@ class AutomationAI:
         result = call_claude_json(full_prompt, system_prompt, agent_name="automation_ai")
 
         if result is not None:
-            self.logger.debug("Claude API returned valid response for step=%s", step)
+            self.logger.debug(f"Claude API returned valid response for step={step}")
             return result
 
         # ── Fallback: mock responses keyed by step ──

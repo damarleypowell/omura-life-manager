@@ -364,7 +364,7 @@ class ProjectAI:
         result = call_claude_json(full_prompt, system_prompt, agent_name="project_ai")
 
         if result is not None:
-            self.logger.debug("Claude API returned valid response for task=%s", task)
+            self.logger.debug(f"Claude API returned valid response for task={task}")
             return result
 
         # ── Fallback: mock responses keyed by task ──

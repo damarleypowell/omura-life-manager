@@ -100,7 +100,10 @@ def _run_migrations():
                 ))
                 conn.commit()
 
-_run_migrations()
+try:
+    _run_migrations()
+except Exception as _mig_err:
+    print(f"WARNING: Migration check failed: {_mig_err} — continuing startup")
 
 # ── Rate Limiting ──
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -887,7 +890,8 @@ def google_auth_callback(code: str, db: Session = Depends(get_db)):
     crud.log_agent_action(db, "system", "google_oauth_connected", status="success")
 
     # Redirect back to dashboard with success flag
-    return RedirectResponse("http://localhost:3001/?google_connected=1")
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3001")
+    return RedirectResponse(f"{frontend_url}/?google_connected=1")
 
 @app.get("/auth/google/status")
 def google_auth_status():
@@ -1207,7 +1211,7 @@ def conversation_chat(conv_id: int, request: ConversationChatRequest, db: Sessio
             role="assistant",
             content=response.get("reply", ""),
             agent_used="supervisor",
-            actions_taken=response.get("actions", []),
+            actions_taken=response.get("actions_taken", []),
             conversation_id=conv_id,
         )
         db.add(assistant_msg)
@@ -1216,7 +1220,7 @@ def conversation_chat(conv_id: int, request: ConversationChatRequest, db: Sessio
 
         return {
             "reply": response.get("reply", ""),
-            "actions": response.get("actions", []),
+            "actions": response.get("actions_taken", []),
             "agent": "supervisor",
             "timestamp": datetime.utcnow().isoformat(),
         }
@@ -1256,14 +1260,14 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             role="assistant",
             content=response.get("reply", ""),
             agent_used="supervisor",
-            actions_taken=response.get("actions", []),
+            actions_taken=response.get("actions_taken", []),
         )
         db.add(assistant_msg)
         db.commit()
 
         return {
             "reply": response.get("reply", ""),
-            "actions": response.get("actions", []),
+            "actions": response.get("actions_taken", []),
             "agent": "supervisor",
             "timestamp": datetime.utcnow().isoformat(),
         }

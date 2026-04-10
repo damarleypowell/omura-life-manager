@@ -148,6 +148,7 @@ function ConversationChat({ conv, onBack }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
+    if (!conv.id) { setLoadingHistory(false); return; }
     setLoadingHistory(true);
     convApi.messages(conv.id)
       .then((data) => setMessages(Array.isArray(data) ? data.map((m) => ({ role: m.role, text: m.content, actions: m.actions_taken || [] })) : []))
@@ -183,7 +184,7 @@ function ConversationChat({ conv, onBack }) {
     } catch {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: 'Could not reach Omura AI. Check the backend is running on port 8003.', actions: [] },
+        { role: 'assistant', text: 'Could not reach Omura AI. Please try again in a moment.', actions: [] },
       ]);
     } finally {
       setLoading(false);

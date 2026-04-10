@@ -1797,18 +1797,37 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _g(obj, key, default=None):
+        """Get attribute from ORM object or dict."""
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @staticmethod
+    def _gv(obj, key, default="unknown"):
+        """Get attribute value, handling enum .value if present."""
+        v = SupervisorAI._g(obj, key)
+        if v is None:
+            return default
+        return v.value if hasattr(v, 'value') else str(v)
+
+    @staticmethod
+    def _fmt_dt(obj, key, fmt="%Y-%m-%d", default="not set"):
+        """Format a datetime field safely."""
+        v = SupervisorAI._g(obj, key)
+        if v is None:
+            return default
+        return v.strftime(fmt) if hasattr(v, 'strftime') else str(v)
+
+    @staticmethod
     def _format_tasks(tasks: List[Any]) -> str:
         if not tasks:
             return "None."
+        g, gv, fd = SupervisorAI._g, SupervisorAI._gv, SupervisorAI._fmt_dt
         lines = []
         for t in tasks[:10]:
-            status = t.status.value if hasattr(t.status, 'value') else str(t.status)
-            priority = t.priority.value if hasattr(t.priority, 'value') else str(t.priority)
-            due = t.due_date.strftime("%Y-%m-%d %H:%M") if t.due_date else "no due date"
-            project_info = f" (Project #{t.project_id})" if t.project_id else ""
-            lines.append(
-                f"  - [ID:{t.id}] [{status}] [{priority}] {t.title} — due: {due}{project_info}"
-            )
+            proj = f" (Project #{g(t, 'project_id')})" if g(t, 'project_id') else ""
+            lines.append(f"  - [ID:{g(t,'id')}] [{gv(t,'status')}] [{gv(t,'priority')}] {g(t,'title','')} — due: {fd(t,'due_date','%Y-%m-%d %H:%M','no due date')}{proj}")
         if len(tasks) > 10:
             lines.append(f"  ... and {len(tasks) - 10} more")
         return "\n".join(lines)
@@ -1817,15 +1836,11 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
     def _format_projects(projects: List[Any]) -> str:
         if not projects:
             return "None."
+        g, gv, fd = SupervisorAI._g, SupervisorAI._gv, SupervisorAI._fmt_dt
         lines = []
         for p in projects[:10]:
-            status = p.status.value if hasattr(p.status, 'value') else str(p.status)
-            priority = p.priority.value if hasattr(p.priority, 'value') else str(p.priority)
-            deadline = p.deadline.strftime("%Y-%m-%d") if p.deadline else "no deadline"
-            lines.append(
-                f"  - [ID:{p.id}] [{status}] [{priority}] {p.name} — "
-                f"{p.progress_pct or 0:.0f}% complete — deadline: {deadline}"
-            )
+            pct = g(p, 'progress_pct') or 0
+            lines.append(f"  - [ID:{g(p,'id')}] [{gv(p,'status')}] [{gv(p,'priority')}] {g(p,'name','')} — {pct:.0f}% complete — deadline: {fd(p,'deadline')}")
         if len(projects) > 10:
             lines.append(f"  ... and {len(projects) - 10} more")
         return "\n".join(lines)
@@ -1834,18 +1849,11 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
     def _format_leads(leads: List[Any]) -> str:
         if not leads:
             return "None."
+        g, gv, fd = SupervisorAI._g, SupervisorAI._gv, SupervisorAI._fmt_dt
         lines = []
-        for lead in leads[:10]:
-            status = lead.status.value if hasattr(lead.status, 'value') else str(lead.status)
-            followup = (
-                lead.next_followup.strftime("%Y-%m-%d")
-                if lead.next_followup else "not set"
-            )
-            lines.append(
-                f"  - [ID:{lead.id}] [{status}] {lead.name}"
-                f" ({lead.company or 'no company'}) — "
-                f"score: {lead.score or 0:.0f} — next follow-up: {followup}"
-            )
+        for l in leads[:10]:
+            score = g(l, 'score') or 0
+            lines.append(f"  - [ID:{g(l,'id')}] [{gv(l,'status')}] {g(l,'name','')} ({g(l,'company','no company')}) — score: {score:.0f} — next follow-up: {fd(l,'next_followup')}")
         if len(leads) > 10:
             lines.append(f"  ... and {len(leads) - 10} more")
         return "\n".join(lines)
@@ -1854,17 +1862,14 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
     def _format_events(events: List[Any]) -> str:
         if not events:
             return "None."
+        g = SupervisorAI._g
         lines = []
         for e in events[:10]:
-            time_str = (
-                e.start_time.strftime("%I:%M %p")
-                if e.start_time and not e.is_all_day
-                else "All day"
-            )
-            location = f" @ {e.location}" if e.location else ""
-            lines.append(
-                f"  - [ID:{e.id}] {time_str} — {e.title}{location}"
-            )
+            st = g(e, 'start_time')
+            is_all_day = g(e, 'is_all_day')
+            time_str = st.strftime("%I:%M %p") if st and not is_all_day and hasattr(st, 'strftime') else "All day"
+            loc = f" @ {g(e,'location')}" if g(e, 'location') else ""
+            lines.append(f"  - [ID:{g(e,'id')}] {time_str} — {g(e,'title','')}{loc}")
         if len(events) > 10:
             lines.append(f"  ... and {len(events) - 10} more")
         return "\n".join(lines)
@@ -1873,17 +1878,11 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
     def _format_content(items: List[Any]) -> str:
         if not items:
             return "None."
+        gv, fd = SupervisorAI._gv, SupervisorAI._fmt_dt
+        g = SupervisorAI._g
         lines = []
         for c in items[:10]:
-            status = c.status.value if hasattr(c.status, 'value') else str(c.status)
-            platform = c.platform.value if hasattr(c.platform, 'value') else str(c.platform or "unset")
-            scheduled = (
-                c.scheduled_at.strftime("%Y-%m-%d %H:%M")
-                if c.scheduled_at else "not scheduled"
-            )
-            lines.append(
-                f"  - [ID:{c.id}] [{status}] [{platform}] {c.title} — {scheduled}"
-            )
+            lines.append(f"  - [ID:{g(c,'id')}] [{gv(c,'status')}] [{gv(c,'platform','unset')}] {g(c,'title','')} — {fd(c,'scheduled_at','%Y-%m-%d %H:%M','not scheduled')}")
         if len(items) > 10:
             lines.append(f"  ... and {len(items) - 10} more")
         return "\n".join(lines)
@@ -1892,14 +1891,10 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
     def _format_communications(comms: List[Any]) -> str:
         if not comms:
             return "None."
+        g, gv = SupervisorAI._g, SupervisorAI._gv
         lines = []
         for c in comms[:5]:
-            platform = c.platform.value if hasattr(c.platform, 'value') else str(c.platform)
-            urgency = c.urgency.value if hasattr(c.urgency, 'value') else str(c.urgency)
-            lines.append(
-                f"  - [ID:{c.id}] [{platform}] [{urgency}] "
-                f"From: {c.sender or 'unknown'} — {c.subject or '(no subject)'}"
-            )
+            lines.append(f"  - [ID:{g(c,'id')}] [{gv(c,'platform')}] [{gv(c,'urgency')}] From: {g(c,'sender','unknown')} — {g(c,'subject','(no subject)')}")
         if len(comms) > 5:
             lines.append(f"  ... and {len(comms) - 5} more")
         return "\n".join(lines)
@@ -1911,26 +1906,20 @@ Use `run_agent` only when specialized analysis is genuinely needed — for routi
         lines = []
         for key, data in list(kpi_summary.items())[:15]:
             avg = data["total"] / data["count"] if data["count"] > 0 else 0
-            lines.append(
-                f"  - {key}: total={data['total']:.2f}, "
-                f"avg={avg:.2f} {data.get('unit', '')}"
-            )
+            lines.append(f"  - {key}: total={data['total']:.2f}, avg={avg:.2f} {data.get('unit', '')}")
         return "\n".join(lines)
 
     @staticmethod
     def _format_health(entries: List[Any]) -> str:
         if not entries:
             return "No recent health data."
+        g = SupervisorAI._g
         lines = []
         for h in entries[:10]:
-            recorded = (
-                h.recorded_at.strftime("%Y-%m-%d")
-                if h.recorded_at else "unknown"
-            )
-            value_str = f"{h.value} {h.unit}" if h.value is not None else ""
-            lines.append(
-                f"  - [{recorded}] [{h.category}] {h.name} {value_str}"
-            )
+            recorded = SupervisorAI._fmt_dt(h, 'recorded_at')
+            val = g(h, 'value')
+            value_str = f"{val} {g(h,'unit','')}" if val is not None else ""
+            lines.append(f"  - [{recorded}] [{g(h,'category','')}] {g(h,'name','')} {value_str}")
         if len(entries) > 10:
             lines.append(f"  ... and {len(entries) - 10} more")
         return "\n".join(lines)

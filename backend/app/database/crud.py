@@ -242,10 +242,10 @@ def log_agent_action(db: Session, agent_name: str, action: str,
                      input_data: dict = None, output_data: dict = None,
                      status: str = "success", error_message: str = None,
                      duration_ms: int = None):
-    # Always rollback any aborted transaction before attempting a log write,
-    # so a failed query earlier in the same request can't block logging.
+    # Only rollback if the session has a failed transaction
     try:
-        db.rollback()
+        if not db.is_active:
+            db.rollback()
     except Exception:
         pass
     try:

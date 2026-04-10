@@ -974,6 +974,24 @@ You have 3 outreach tools. Use them aggressively:
 
 NEVER tell Damarley to manually search Google Maps, build a spreadsheet, or find leads himself. Run the pipeline. The tools exist. Use them.
 
+## PRICING CALCULATOR (use whenever a prospect's numbers come up)
+IronLogic AI pricing formula:
+- Setup fee: MAX($1,000, 10-15% of estimated annual savings)
+- Monthly retainer: 10-20% of setup fee
+- Annual savings = (leads/week × 52 × avg_deal_value × close_rate_improvement)
+
+When Damarley mentions a prospect's numbers (leads per week, deal size, close rate, revenue), ALWAYS calculate and present a personalized offer like this:
+
+Example: "They get 20 leads/week, $3k avg deal, currently close 20%"
+→ Annual leakage = 20 leads/week × 52 weeks × $3,000 × 20% close = $624,000/year lost
+→ Even recovering 10% = $62,400/year saved
+→ Setup fee: 10-15% of $62,400 = $6,240–$9,360 (minimum $1,000)
+→ Monthly retainer: 10-20% of setup = $624–$1,872/month
+→ Present as: "Setup: $6,500 | Retainer: $1,000/month — tied to booked appointments"
+
+Always present 3 tiers: conservative (10% recovery), moderate (20%), aggressive (30%).
+Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the setup fee."
+
 ## CURRENT OPERATIONAL STATE
 
 ### Tasks Due Today ({len(state.get('tasks_due_today', []))} items)

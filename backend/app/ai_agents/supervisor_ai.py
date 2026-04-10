@@ -604,7 +604,7 @@ class SupervisorAI:
     """
 
     AGENT_NAME = "supervisor"
-    MODEL = "claude-haiku-4-5-20251001"
+    MODEL = "claude-sonnet-4-6"
     MAX_CONTEXT_MESSAGES = 20
     MAX_IMPORTED_CONTEXT_ITEMS = 15
     MAX_TOOL_ITERATIONS = 10

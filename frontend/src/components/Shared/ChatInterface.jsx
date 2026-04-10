@@ -172,7 +172,14 @@ function ConversationChat({ conv, onBack }) {
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setLoading(true);
     try {
-      const data = await convApi.chat(conv.id, text);
+      // If conv has no id yet (creation failed earlier), create it now
+      let convId = conv.id;
+      if (!convId) {
+        const created = await convApi.create('New Conversation');
+        convId = created.id;
+        conv.id = convId;
+      }
+      const data = await convApi.chat(convId, text);
       setMessages((prev) => [
         ...prev,
         {

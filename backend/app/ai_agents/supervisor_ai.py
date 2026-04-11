@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -1788,69 +1789,136 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
     # ------------------------------------------------------------------
 
     def _tool_run_outreach_pipeline(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Run the full outreach pipeline: scrape → verify → research → draft → queue."""
+        """Run the full outreach pipeline in background: scrape → verify → research → draft → queue."""
         from backend.app.ai_agents.outreach_ai import OutreachAI
-        try:
-            agent = OutreachAI(self.db)
-            result = agent.run_pipeline(
-                titles=params.get("titles"),
-                locations=params.get("locations"),
-                industries=params.get("industries"),
-                domains=params.get("domains"),
-                daily_limit=params.get("daily_limit", 20),
-            )
-            crud.log_agent_action(self.db, "supervisor", "tool:run_outreach_pipeline", params, result, "success")
-            return {"success": True, **result}
-        except Exception as exc:
-            self.logger.error(f"run_outreach_pipeline failed: {exc}")
-            return {"success": False, "error": str(exc)}
+        from backend.app.database.session import SessionLocal
+
+        industries = params.get("industries", [])
+        locations = params.get("locations", [])
+        daily_limit = params.get("daily_limit", 20)
+
+        def _run_in_background():
+            bg_db = SessionLocal()
+            try:
+                agent = OutreachAI(bg_db)
+                result = agent.run_pipeline(
+                    titles=params.get("titles"),
+                    locations=locations,
+                    industries=industries,
+                    domains=params.get("domains"),
+                    daily_limit=daily_limit,
+                )
+                crud.log_agent_action(bg_db, "supervisor", "tool:run_outreach_pipeline", params, result, "success")
+                self.logger.info(f"Background pipeline complete: {result}")
+            except Exception as exc:
+                self.logger.error(f"Background run_outreach_pipeline failed: {exc}")
+            finally:
+                bg_db.close()
+
+        threading.Thread(target=_run_in_background, daemon=True).start()
+        return {
+            "success": True,
+            "queued": True,
+            "message": (
+                f"Outreach pipeline started in background for "
+                f"{industries or 'all verticals'} in {locations or 'all locations'}, "
+                f"limit {daily_limit}. Scraping now — new leads will appear in CRM within 2-3 minutes. "
+                f"Check agent logs for progress."
+            ),
+        }
 
     def _tool_send_outreach_email(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Send outreach email to a single lead by ID."""
+        """Send outreach email to a single lead by ID — runs in background thread to avoid timeout."""
         from backend.app.ai_agents.outreach_ai import OutreachAI
+        from backend.app.database.session import SessionLocal
         lead_id = params.get("lead_id")
         if not lead_id:
             return {"success": False, "error": "lead_id is required"}
+
+        # Look up lead name/email for the immediate response
+        lead_preview = {}
         try:
-            agent = OutreachAI(self.db)
-            result = agent.send_initial_outreach(lead_id)
-            crud.log_agent_action(self.db, "supervisor", "tool:send_outreach_email", params, result, "success")
-            return {"success": True, **result}
-        except Exception as exc:
-            self.logger.error(f"send_outreach_email failed: {exc}")
-            return {"success": False, "error": str(exc)}
+            lead = self.db.query(Lead).filter(Lead.id == lead_id).first()
+            if not lead:
+                return {"success": False, "error": f"Lead {lead_id} not found"}
+            lead_preview = {"name": lead.name, "email": lead.email, "company": lead.company}
+        except Exception:
+            pass
+
+        def _send_in_background():
+            bg_db = SessionLocal()
+            try:
+                agent = OutreachAI(bg_db)
+                result = agent.send_initial_outreach(lead_id)
+                crud.log_agent_action(bg_db, "supervisor", "tool:send_outreach_email", params, result, "success")
+                self.logger.info(f"Background send to lead {lead_id}: {result}")
+            except Exception as exc:
+                self.logger.error(f"Background send_outreach_email failed: {exc}")
+            finally:
+                bg_db.close()
+
+        threading.Thread(target=_send_in_background, daemon=True).start()
+        return {
+            "success": True,
+            "queued": True,
+            "message": f"Email send queued for {lead_preview.get('name', 'lead')} ({lead_preview.get('email', '')}). Sending in background — check agent logs for delivery confirmation.",
+            **lead_preview,
+        }
 
     def _tool_bulk_send_outreach(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Send outreach emails to all new leads that have drafted copy."""
+        """Send outreach emails to all new leads — runs in background thread to avoid timeout."""
         from backend.app.ai_agents.outreach_ai import OutreachAI
-        from backend.app.database.models import Lead, LeadStatus
+        from backend.app.database.session import SessionLocal
         limit = params.get("limit", 50)
+
+        # Count leads for the immediate response
+        lead_count = 0
         try:
-            leads = (
+            lead_count = (
                 self.db.query(Lead)
                 .filter(Lead.status == LeadStatus.NEW, Lead.email.isnot(None))
-                .limit(limit)
-                .all()
+                .count()
             )
-            if not leads:
-                return {"success": True, "sent": 0, "message": "No new leads with emails found."}
+        except Exception:
+            pass
 
-            agent = OutreachAI(self.db)
-            sent = 0
-            failed = 0
-            for lead in leads:
-                try:
-                    agent.send_initial_outreach(lead.id)
-                    sent += 1
-                except Exception:
-                    failed += 1
+        if lead_count == 0:
+            return {"success": True, "sent": 0, "message": "No new leads with emails found."}
 
-            result = {"sent": sent, "failed": failed, "total_leads": len(leads)}
-            crud.log_agent_action(self.db, "supervisor", "tool:bulk_send_outreach", params, result, "success")
-            return {"success": True, **result}
-        except Exception as exc:
-            self.logger.error(f"bulk_send_outreach failed: {exc}")
-            return {"success": False, "error": str(exc)}
+        def _bulk_send_in_background():
+            bg_db = SessionLocal()
+            try:
+                leads = (
+                    bg_db.query(Lead)
+                    .filter(Lead.status == LeadStatus.NEW, Lead.email.isnot(None))
+                    .limit(limit)
+                    .all()
+                )
+                agent = OutreachAI(bg_db)
+                sent = 0
+                failed = 0
+                for lead in leads:
+                    try:
+                        agent.send_initial_outreach(lead.id)
+                        sent += 1
+                    except Exception as e:
+                        self.logger.error(f"Failed send to lead {lead.id}: {e}")
+                        failed += 1
+                result = {"sent": sent, "failed": failed, "total": len(leads)}
+                crud.log_agent_action(bg_db, "supervisor", "tool:bulk_send_outreach", params, result, "success")
+                self.logger.info(f"Background bulk send complete: {result}")
+            except Exception as exc:
+                self.logger.error(f"Background bulk_send_outreach failed: {exc}")
+            finally:
+                bg_db.close()
+
+        threading.Thread(target=_bulk_send_in_background, daemon=True).start()
+        return {
+            "success": True,
+            "queued": True,
+            "total_leads": lead_count,
+            "message": f"Bulk send queued for {min(lead_count, limit)} leads. Sending in background — check agent logs for delivery confirmation.",
+        }
 
     # ------------------------------------------------------------------
     # Internet access request

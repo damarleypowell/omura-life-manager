@@ -658,8 +658,183 @@ def draft_outreach_copy(lead: dict, research: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Apollo Lead Search (when API key is present)
+# Direct Web Scraper — no API keys needed
 # ---------------------------------------------------------------------------
+
+_SCRAPER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+_EMAIL_RE = re.compile(
+    r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
+)
+
+_SKIP_EMAIL_PREFIXES = (
+    "noreply", "no-reply", "donotreply", "support", "help",
+    "info@example", "example@", "test@", "admin@example",
+    "webmaster", "hostmaster", "postmaster",
+)
+
+
+def _is_valid_contact_email(email: str) -> bool:
+    email_lower = email.lower()
+    if any(email_lower.startswith(p) for p in _SKIP_EMAIL_PREFIXES):
+        return False
+    # Skip image/asset false positives
+    if any(email_lower.endswith(ext) for ext in (".png", ".jpg", ".gif", ".svg", ".css", ".js")):
+        return False
+    return True
+
+
+def _scrape_emails_from_url(url: str, timeout: int = 8) -> list[str]:
+    """Fetch a page and extract email addresses from the HTML."""
+    try:
+        r = httpx.get(url, headers=_SCRAPER_HEADERS, timeout=timeout, follow_redirects=True)
+        if r.status_code != 200:
+            return []
+        # Also decode mailto: links
+        text = r.text
+        emails = _EMAIL_RE.findall(text)
+        unique = list({e.lower() for e in emails if _is_valid_contact_email(e)})
+        return unique[:10]
+    except Exception:
+        return []
+
+
+def _extract_domain(url: str) -> str:
+    url = url.replace("https://", "").replace("http://", "").split("/")[0]
+    return url.lower().strip()
+
+
+def _scrape_business_website(website: str) -> tuple[list[str], str]:
+    """
+    Try homepage + /contact + /about for emails.
+    Returns (emails_found, best_email).
+    """
+    base = website.rstrip("/")
+    all_emails: list[str] = []
+    for path in ["", "/contact", "/contact-us", "/about", "/about-us"]:
+        found = _scrape_emails_from_url(base + path)
+        all_emails.extend(found)
+        if all_emails:
+            break  # stop as soon as we find something
+
+    unique = list(dict.fromkeys(all_emails))  # preserve order, dedupe
+
+    # Prefer emails that look like owner/contact (not generic info@)
+    preferred = [e for e in unique if not e.startswith("info@") and not e.startswith("contact@")]
+    best = preferred[0] if preferred else (unique[0] if unique else "")
+    return unique, best
+
+
+def _google_search_businesses(query: str, num_results: int = 10) -> list[dict]:
+    """
+    Scrape Google search results for business websites.
+    Returns list of {title, url} dicts.
+    """
+    import urllib.parse
+    search_url = (
+        "https://www.google.com/search?q="
+        + urllib.parse.quote_plus(query)
+        + f"&num={num_results}"
+    )
+    try:
+        r = httpx.get(search_url, headers=_SCRAPER_HEADERS, timeout=12, follow_redirects=True)
+        if r.status_code != 200:
+            _logger.warning(f"Google search returned {r.status_code} for: {query}")
+            return []
+
+        html = r.text
+        # Extract result links — Google wraps them in /url?q=... or href="https://..."
+        raw_urls = re.findall(r'href="(https?://(?!google|youtube|facebook|instagram|twitter|yelp\.com/search|maps\.google)[^"&]+)"', html)
+        # Also grab titles from <h3> tags nearby — approximate
+        titles = re.findall(r'<h3[^>]*>([^<]{3,80})</h3>', html)
+
+        results = []
+        seen = set()
+        for url in raw_urls:
+            domain = _extract_domain(url)
+            # Skip aggregators and social platforms
+            if any(skip in domain for skip in [
+                "google", "youtube", "facebook", "instagram", "twitter",
+                "linkedin", "yelp", "tripadvisor", "yellowpages", "bbb.org",
+                "wikipedia", "healthgrades", "zocdoc", "realtor.com",
+                "zillow", "redfin", "angieslist", "homeadvisor",
+            ]):
+                continue
+            if domain in seen:
+                continue
+            seen.add(domain)
+            results.append({"title": domain, "url": url})
+            if len(results) >= num_results:
+                break
+
+        _logger.debug(f"Google scrape for '{query}' found {len(results)} results")
+        return results
+
+    except Exception as e:
+        _logger.warning(f"Google search scrape failed: {e}")
+        return []
+
+
+def _yelp_search_businesses(keyword: str, location: str, num_results: int = 10) -> list[dict]:
+    """
+    Scrape Yelp search results to get business names + websites.
+    Returns list of {name, website, phone} dicts.
+    """
+    import urllib.parse
+    url = (
+        "https://www.yelp.com/search?find_desc="
+        + urllib.parse.quote_plus(keyword)
+        + "&find_loc="
+        + urllib.parse.quote_plus(location)
+    )
+    try:
+        r = httpx.get(url, headers=_SCRAPER_HEADERS, timeout=12, follow_redirects=True)
+        if r.status_code != 200:
+            return []
+
+        html = r.text
+        # Yelp business pages: /biz/business-name
+        biz_paths = re.findall(r'href="(/biz/[a-z0-9\-]+)"', html)
+        unique_paths = list(dict.fromkeys(biz_paths))[:num_results]
+
+        businesses = []
+        for path in unique_paths:
+            biz_url = "https://www.yelp.com" + path
+            try:
+                br = httpx.get(biz_url, headers=_SCRAPER_HEADERS, timeout=10, follow_redirects=True)
+                if br.status_code != 200:
+                    continue
+                bhtml = br.text
+                # Extract business website
+                website_match = re.search(r'href="(https?://(?!yelp\.com)[^"]+)"[^>]*>\s*(?:Business Website|Visit Website)', bhtml, re.IGNORECASE)
+                if not website_match:
+                    # fallback: any external link in biz info section
+                    website_match = re.search(r'"website"[^>]*href="(https?://(?!yelp\.com)[^"]+)"', bhtml)
+                website = website_match.group(1) if website_match else ""
+
+                name_match = re.search(r'<h1[^>]*>([^<]{2,80})</h1>', bhtml)
+                name = name_match.group(1).strip() if name_match else path.split("/biz/")[-1].replace("-", " ").title()
+
+                if website:
+                    businesses.append({"name": name, "website": website})
+            except Exception:
+                continue
+
+        _logger.debug(f"Yelp scrape for '{keyword}' in '{location}' found {len(businesses)} businesses")
+        return businesses
+
+    except Exception as e:
+        _logger.warning(f"Yelp scrape failed: {e}")
+        return []
+
 
 def find_leads_apollo(
     titles: list[str],
@@ -667,115 +842,90 @@ def find_leads_apollo(
     industries: list[str],
     per_page: int = 10,
 ) -> list[dict]:
-    """Search Apollo.io for leads then enrich to get emails.
-
-    Two-step: api_search (free, no credits) → bulk_match (credits, gets emails).
-    Returns list of lead dicts with name, email, company, title.
-    Falls back to empty list if no API key.
     """
-    api_key = settings.APOLLO_API_KEY
-    if not api_key:
-        _logger.warning("Apollo API key not set — skipping Apollo search")
-        return []
+    Find business leads via direct web scraping (Google + Yelp).
+    No API keys required. Searches for businesses by industry + location,
+    then scrapes their websites for contact emails.
 
-    headers = {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache",
-        "X-Api-Key": api_key,
-        "accept": "application/json",
-    }
+    Returns list of lead dicts: {name, email, company, title, website, source}.
+    """
+    leads: list[dict] = []
+    seen_domains: set[str] = set()
+    seen_emails: set[str] = set()
 
-    # Step 1: Search — free, no credits, no emails returned
-    payload: dict = {
-        "per_page": min(per_page, 100),
-        "page": 1,
-    }
-    if titles:
-        payload["person_titles"] = titles
-    if locations:
-        payload["person_locations"] = locations
-    if industries:
-        payload["q_keywords"] = " ".join(industries)
+    # Build search queries from industries + locations
+    industry_keyword = industries[0] if industries else "business"
+    title_hint = titles[0] if titles else "owner"
 
-    try:
-        resp = httpx.post(
-            "https://api.apollo.io/api/v1/mixed_people/api_search",
-            json=payload,
-            headers=headers,
-            timeout=20,
-        )
-        if resp.status_code != 200:
-            _logger.warning(f"Apollo search failed: {resp.status_code} {resp.text[:300]}")
-            return []
+    for location in locations[:3]:  # cap to 3 locations
+        if len(leads) >= per_page:
+            break
 
-        people = resp.json().get("people", [])
-        _logger.info(f"Apollo search found {len(people)} candidates")
+        # --- Try Yelp first (more structured) ---
+        yelp_results = _yelp_search_businesses(industry_keyword, location, num_results=8)
+        for biz in yelp_results:
+            if len(leads) >= per_page:
+                break
+            website = biz.get("website", "")
+            if not website:
+                continue
+            domain = _extract_domain(website)
+            if domain in seen_domains:
+                continue
+            seen_domains.add(domain)
 
-        if not people:
-            return []
+            all_emails, best_email = _scrape_business_website(website)
+            if not best_email:
+                continue
+            if best_email in seen_emails:
+                continue
+            seen_emails.add(best_email)
 
-        # Try to get emails directly from Apollo results first
-        leads = []
-        domains_to_hunt = []
+            leads.append({
+                "name": biz.get("name", domain.split(".")[0].title()),
+                "email": best_email,
+                "company": biz.get("name", domain.split(".")[0].title()),
+                "title": title_hint,
+                "website": website,
+                "linkedin_url": "",
+                "source": "yelp_scrape",
+            })
 
-        for p in people[:per_page]:
-            email = p.get("email") or ""
-            org = p.get("organization") or p.get("account") or {}
-            domain = org.get("primary_domain") or org.get("website_url", "").replace("https://", "").replace("http://", "").split("/")[0]
-            name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
-            company = org.get("name", "")
-            website = org.get("website_url", "") or (f"https://{domain}" if domain else "")
+        # --- Fill remaining slots via Google ---
+        if len(leads) < per_page:
+            query = f'{industry_keyword} {title_hint} "{location}" contact email'
+            google_results = _google_search_businesses(query, num_results=10)
+            for result in google_results:
+                if len(leads) >= per_page:
+                    break
+                website = result.get("url", "")
+                if not website:
+                    continue
+                domain = _extract_domain(website)
+                if domain in seen_domains:
+                    continue
+                seen_domains.add(domain)
 
-            if email:
+                all_emails, best_email = _scrape_business_website(website)
+                if not best_email:
+                    continue
+                if best_email in seen_emails:
+                    continue
+                seen_emails.add(best_email)
+
+                company = result.get("title", domain.split(".")[0].title())
                 leads.append({
-                    "name": name, "email": email, "company": company,
-                    "title": p.get("title", ""), "website": website,
-                    "linkedin_url": p.get("linkedin_url", ""), "source": "apollo",
-                })
-            elif domain and name and company:
-                # Queue for Hunter.io email lookup
-                domains_to_hunt.append({
-                    "name": name, "company": company, "domain": domain,
-                    "title": p.get("title", ""), "website": website,
+                    "name": company,
+                    "email": best_email,
+                    "company": company,
+                    "title": title_hint,
+                    "website": website,
+                    "linkedin_url": "",
+                    "source": "google_scrape",
                 })
 
-        # Step 2: Use Hunter.io to find emails for people Apollo found but has no email for
-        if domains_to_hunt:
-            _logger.info(f"Trying Hunter.io for {len(domains_to_hunt)} Apollo leads without emails")
-            hunter_key = settings.HUNTER_API_KEY
-            if hunter_key:
-                for person in domains_to_hunt[:per_page - len(leads)]:
-                    try:
-                        # Hunter email finder by name + domain
-                        r = httpx.get(
-                            "https://api.hunter.io/v2/email-finder",
-                            params={
-                                "domain": person["domain"],
-                                "first_name": person["name"].split()[0] if person["name"] else "",
-                                "last_name": person["name"].split()[-1] if len(person["name"].split()) > 1 else "",
-                                "api_key": hunter_key,
-                            },
-                            timeout=10,
-                        )
-                        if r.status_code == 200:
-                            data = r.json().get("data", {})
-                            email = data.get("email", "")
-                            confidence = data.get("score", 0)
-                            if email and confidence >= 50:
-                                leads.append({
-                                    "name": person["name"], "email": email,
-                                    "company": person["company"], "title": person["title"],
-                                    "website": person["website"], "source": "apollo+hunter",
-                                })
-                    except Exception as e:
-                        _logger.debug(f"Hunter lookup failed for {person['domain']}: {e}")
-
-        _logger.info(f"Apollo+Hunter pipeline returned {len(leads)} leads with emails")
-        return leads
-
-    except Exception as exc:
-        _logger.error(f"Apollo pipeline error: {exc}")
-        return []
+    _logger.info(f"Web scraper found {len(leads)} leads with emails for {industry_keyword} in {locations}")
+    return leads
 
 
 # ---------------------------------------------------------------------------
@@ -790,43 +940,30 @@ class OutreachAI:
         self.logger = OmuraLogger("outreach_ai")
 
     def find_leads_by_domains(self, domains: list[str], limit_per_domain: int = 3) -> list[dict]:
-        """Find decision-maker emails from a list of company domains using Hunter.io.
+        """Find contact emails by directly scraping each company's website.
 
         Args:
             domains: List of company domains e.g. ["rossautoja.com", "scotiabank.com"]
-            limit_per_domain: Max emails to pull per domain
+            limit_per_domain: Max emails to return per domain
 
         Returns:
             List of lead dicts ready for the pipeline
         """
         leads = []
         for domain in domains:
-            emails = hunter_find_emails(domain, limit=limit_per_domain)
-            # Prefer decision makers: CEO, founder, director, owner, manager
-            PRIORITY_TITLES = ("ceo", "founder", "owner", "director", "president", "head", "manager", "vp")
-            emails.sort(key=lambda e: (
-                0 if any(t in (e.get("position") or "").lower() for t in PRIORITY_TITLES) else 1,
-                -(e.get("confidence") or 0),
-            ))
-            # Skip generic/info emails — target named decision makers only
-            SKIP_PREFIXES = ("info", "contact", "hello", "support", "admin", "sales", "enquiries", "enquiry", "general")
-            named = [e for e in emails if e.get("email") and not any(
-                e["email"].split("@")[0].lower().startswith(p) for p in SKIP_PREFIXES
-            )]
-            targets = named if named else []  # don't fall back to info@ emails
-            for e in targets[:1]:
-                if not e.get("email"):
-                    continue
-                name = f"{e.get('first_name', '')} {e.get('last_name', '')}".strip()
+            base_url = domain if domain.startswith("http") else f"https://{domain}"
+            all_emails, best_email = _scrape_business_website(base_url)
+            if best_email:
+                company = domain.split(".")[0].title()
                 leads.append({
-                    "name": name or domain.split(".")[0].title(),
-                    "email": e["email"],
-                    "company": domain.split(".")[0].title(),
-                    "title": e.get("position", ""),
-                    "website": domain,
-                    "source": "hunter",
+                    "name": company,
+                    "email": best_email,
+                    "company": company,
+                    "title": "Owner",
+                    "website": base_url,
+                    "source": "domain_scrape",
                 })
-        self.logger.info(f"Hunter found {len(leads)} leads from {len(domains)} domains")
+        self.logger.info(f"Domain scraper found {len(leads)} leads from {len(domains)} domains")
         return leads
 
     def run_pipeline(
@@ -867,7 +1004,7 @@ class OutreachAI:
             raw_leads = find_leads_apollo(titles, locations, industries, per_page=daily_limit)
 
         if not raw_leads:
-            self.logger.warning("No leads found — Apollo key may be missing. Provide manual_leads.")
+            self.logger.warning(f"No leads found via web scrape for industries={industries} locations={locations}. Try different search terms or provide manual_leads.")
             return {"status": "no_leads", "processed": 0, "queued": 0}
 
         results = []

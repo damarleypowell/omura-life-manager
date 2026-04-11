@@ -1,39 +1,40 @@
 """
-Shared email sending utility — avoids circular imports.
-Used by outreach_ai, automation jobs, and main.py endpoints.
+Shared email sending utility — uses Gmail SMTP.
 """
 from __future__ import annotations
+import smtplib
 from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from backend.app.config import settings
 
 
 def send_via_sendgrid(to: str, subject: str, body: str, cc: str = None, html_body: str = None) -> dict:
-    """Send an email via SendGrid API."""
-    import sendgrid as _sg
-    from sendgrid.helpers.mail import Mail, Content
+    """Send email via Gmail SMTP (function kept as send_via_sendgrid to avoid breaking callers)."""
+    gmail_user = settings.GMAIL_USER
+    gmail_password = settings.GMAIL_APP_PASSWORD
 
-    api_key = settings.SENDGRID_API_KEY
-    from_email = settings.DEFAULT_FROM_EMAIL or settings.GMAIL_USER
-    if not api_key:
-        raise ValueError("SENDGRID_API_KEY not configured in .env")
-    if not from_email:
-        raise ValueError("DEFAULT_FROM_EMAIL not configured in .env")
+    if not gmail_user or not gmail_password:
+        raise ValueError("GMAIL_USER and GMAIL_APP_PASSWORD must be set")
 
-    client = _sg.SendGridAPIClient(api_key=api_key)
-    message = Mail(from_email=from_email, to_emails=to, subject=subject)
-    message.add_content(Content("text/plain", body))
-    if html_body:
-        message.add_content(Content("text/html", html_body))
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = gmail_user
+    msg["To"] = to
     if cc:
-        from sendgrid.helpers.mail import Cc
-        message.cc = Cc(cc)
+        msg["Cc"] = cc
 
-    response = client.send(message)
-    if response.status_code not in (200, 201, 202):
-        raise Exception(f"SendGrid returned status {response.status_code}: {response.body}")
+    msg.attach(MIMEText(body, "plain"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html"))
+
+    recipients = [to] + ([cc] if cc else [])
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(gmail_user, gmail_password)
+        server.sendmail(gmail_user, recipients, msg.as_string())
 
     return {
         "sent": True, "to": to, "subject": subject,
-        "provider": "sendgrid", "status_code": response.status_code,
+        "provider": "gmail", "status_code": 200,
         "timestamp": datetime.utcnow().isoformat(),
     }

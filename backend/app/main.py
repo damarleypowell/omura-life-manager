@@ -161,6 +161,7 @@ from backend.app.scheduler import scheduler as _scheduler, schedule_lead_followu
 from backend.app.scheduler_jobs import scheduled_inbox_triage as _scheduled_inbox_triage
 from backend.app.scheduler_jobs import scheduled_daily_briefing as _scheduled_daily_briefing
 from backend.app.scheduler_jobs import scheduled_weekly_pipeline as _scheduled_weekly_pipeline
+from backend.app.scheduler_jobs import scheduled_daily_outreach as _scheduled_daily_outreach
 from backend.app.email_utils import send_via_sendgrid as _send_via_sendgrid
 from backend.app.google_utils import get_google_access_token as _get_google_access_token, extract_email_body as _extract_email_body
 from apscheduler.triggers.cron import CronTrigger
@@ -169,6 +170,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 _scheduler.add_job(_scheduled_inbox_triage, IntervalTrigger(minutes=30), id="inbox_triage", replace_existing=True)
 _scheduler.add_job(_scheduled_daily_briefing, CronTrigger(hour=8, minute=0), id="daily_briefing", replace_existing=True)
 _scheduler.add_job(_scheduled_weekly_pipeline, CronTrigger(day_of_week="mon", hour=9, minute=0), id="weekly_pipeline", replace_existing=True)
+_scheduler.add_job(_scheduled_daily_outreach, CronTrigger(hour=9, minute=0), id="daily_outreach", replace_existing=True)
 _scheduler.start()
 
 

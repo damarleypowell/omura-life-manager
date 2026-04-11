@@ -250,3 +250,57 @@ def scheduled_weekly_pipeline():
         crud.log_agent_action(db, "scheduler", "pipeline_analysis", {}, None, "error", str(exc))
     finally:
         db.close()
+
+
+def scheduled_daily_outreach():
+    """Run every day at 9am UTC: scrape new leads, draft copy, send Touch 1, queue sequences."""
+    from backend.app.database.session import SessionLocal
+    from backend.app.database import crud
+    from backend.app.ai_agents.outreach_ai import OutreachAI
+
+    VERTICALS = [
+        {"titles": ["Practice Owner", "Dentist", "Dental Director"], "industries": ["dental"], "locations": ["New York", "Los Angeles", "Miami", "Dallas", "Houston", "Chicago"], "daily_limit": 15},
+        {"titles": ["Owner", "Principal", "Broker"], "industries": ["real estate"], "locations": ["New York", "Los Angeles", "Miami", "Dallas", "Houston"], "daily_limit": 10},
+        {"titles": ["Owner", "Managing Partner", "Attorney"], "industries": ["law"], "locations": ["New York", "Los Angeles", "Miami", "Dallas"], "daily_limit": 10},
+        {"titles": ["Owner", "CEO", "Founder"], "industries": ["solar"], "locations": ["Los Angeles", "Miami", "Dallas", "Phoenix"], "daily_limit": 10},
+        {"titles": ["Owner", "Operations Manager"], "industries": ["hvac", "roofing", "plumbing"], "locations": ["Dallas", "Houston", "Chicago", "Atlanta"], "daily_limit": 10},
+    ]
+
+    db = SessionLocal()
+    total_queued = 0
+    total_sent = 0
+    try:
+        agent = OutreachAI(db)
+        for v in VERTICALS:
+            result = agent.run_pipeline(
+                titles=v["titles"],
+                locations=v["locations"],
+                industries=v["industries"],
+                daily_limit=v["daily_limit"],
+            )
+            queued = result.get("queued", 0)
+            total_queued += queued
+
+            # Send Touch 1 to all newly queued leads
+            from backend.app.database.models import Lead, LeadStatus
+            new_leads = (
+                db.query(Lead)
+                .filter(Lead.status == LeadStatus.NEW, Lead.email.isnot(None))
+                .order_by(Lead.created_at.desc())
+                .limit(queued or 5)
+                .all()
+            )
+            for lead in new_leads:
+                try:
+                    agent.send_initial_outreach(lead.id)
+                    total_sent += 1
+                except Exception:
+                    pass
+
+        crud.log_agent_action(db, "scheduler", "daily_outreach", {}, {
+            "total_queued": total_queued, "total_sent": total_sent,
+        }, "success")
+    except Exception as exc:
+        crud.log_agent_action(db, "scheduler", "daily_outreach", {}, None, "error", str(exc))
+    finally:
+        db.close()

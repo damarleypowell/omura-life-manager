@@ -711,46 +711,66 @@ def find_leads_apollo(
         people = resp.json().get("people", [])
         _logger.info(f"Apollo search found {len(people)} candidates")
 
-        # Filter to only people Apollo has emails for
-        with_email = [p for p in people if p.get("has_email")]
-        if not with_email:
+        if not people:
             return []
 
-        # Step 2: Enrich by ID to get actual emails (uses credits)
-        ids = [p["id"] for p in with_email[:per_page]]
-        enrich_payload = {
-            "api_key": api_key,
-            "details": [{"id": pid} for pid in ids],
-            "reveal_personal_emails": False,
-        }
-        enrich_resp = httpx.post(
-            "https://api.apollo.io/api/v1/people/bulk_match",
-            json=enrich_payload,
-            headers=headers,
-            timeout=30,
-        )
-        if enrich_resp.status_code != 200:
-            _logger.warning(f"Apollo enrichment failed: {enrich_resp.status_code}")
-            return []
-
-        matches = enrich_resp.json().get("matches", [])
+        # Try to get emails directly from Apollo results first
         leads = []
-        for m in matches:
-            email = m.get("email") or ""
-            if not email:
-                continue
-            org = m.get("organization") or {}
-            leads.append({
-                "name": f"{m.get('first_name', '')} {m.get('last_name', '')}".strip(),
-                "email": email,
-                "company": org.get("name", ""),
-                "title": m.get("title", ""),
-                "linkedin_url": m.get("linkedin_url", ""),
-                "website": org.get("website_url", "") or org.get("primary_domain", ""),
-                "source": "apollo",
-            })
+        domains_to_hunt = []
 
-        _logger.info(f"Apollo enriched {len(leads)} leads with emails")
+        for p in people[:per_page]:
+            email = p.get("email") or ""
+            org = p.get("organization") or p.get("account") or {}
+            domain = org.get("primary_domain") or org.get("website_url", "").replace("https://", "").replace("http://", "").split("/")[0]
+            name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+            company = org.get("name", "")
+            website = org.get("website_url", "") or (f"https://{domain}" if domain else "")
+
+            if email:
+                leads.append({
+                    "name": name, "email": email, "company": company,
+                    "title": p.get("title", ""), "website": website,
+                    "linkedin_url": p.get("linkedin_url", ""), "source": "apollo",
+                })
+            elif domain and name and company:
+                # Queue for Hunter.io email lookup
+                domains_to_hunt.append({
+                    "name": name, "company": company, "domain": domain,
+                    "title": p.get("title", ""), "website": website,
+                })
+
+        # Step 2: Use Hunter.io to find emails for people Apollo found but has no email for
+        if domains_to_hunt:
+            _logger.info(f"Trying Hunter.io for {len(domains_to_hunt)} Apollo leads without emails")
+            hunter_key = settings.HUNTER_API_KEY
+            if hunter_key:
+                for person in domains_to_hunt[:per_page - len(leads)]:
+                    try:
+                        # Hunter email finder by name + domain
+                        r = httpx.get(
+                            "https://api.hunter.io/v2/email-finder",
+                            params={
+                                "domain": person["domain"],
+                                "first_name": person["name"].split()[0] if person["name"] else "",
+                                "last_name": person["name"].split()[-1] if len(person["name"].split()) > 1 else "",
+                                "api_key": hunter_key,
+                            },
+                            timeout=10,
+                        )
+                        if r.status_code == 200:
+                            data = r.json().get("data", {})
+                            email = data.get("email", "")
+                            confidence = data.get("score", 0)
+                            if email and confidence >= 50:
+                                leads.append({
+                                    "name": person["name"], "email": email,
+                                    "company": person["company"], "title": person["title"],
+                                    "website": person["website"], "source": "apollo+hunter",
+                                })
+                    except Exception as e:
+                        _logger.debug(f"Hunter lookup failed for {person['domain']}: {e}")
+
+        _logger.info(f"Apollo+Hunter pipeline returned {len(leads)} leads with emails")
         return leads
 
     except Exception as exc:

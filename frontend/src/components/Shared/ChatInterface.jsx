@@ -188,11 +188,13 @@ function ConversationChat({ conv, onBack }) {
           actions: data.actions || [],
         },
       ]);
-    } catch {
+    } catch (err) {
+      const msg = err?.message || err?.status || 'timeout';
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: 'Could not reach Omura AI. Please try again in a moment.', actions: [] },
+        { role: 'assistant', text: `Error: ${msg}. Check console for details.`, actions: [] },
       ]);
+      console.error('[Chat error]', err);
     } finally {
       setLoading(false);
     }

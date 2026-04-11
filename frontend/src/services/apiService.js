@@ -7,7 +7,7 @@ import axios from 'axios';
 
 // Use relative URLs — Next.js rewrites in next.config.js proxy /api/* to the backend
 const api = axios.create({
-  timeout: 30000,
+  timeout: 90000,
   headers: { 'Content-Type': 'application/json' },
 });
 

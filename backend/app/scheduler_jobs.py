@@ -22,17 +22,33 @@ def send_followup_email(lead_id: int, day: int):
         if not lead.email:
             return
 
-        crm = CrmAI(db)
-        lead_dict = {
-            "id": lead.id, "name": lead.name or "", "email": lead.email or "",
-            "company": lead.company or "", "source": lead.source or "",
-            "stage": lead.status.value if hasattr(lead.status, "value") else "new",
-            "interactions": [],
-            "last_activity": lead.last_contact.isoformat() if lead.last_contact else "",
-        }
-        followup = crm.suggest_followup(lead_dict)
-        subject = followup.get("subject") or f"Following up — {lead.name}"
-        body = followup.get("message") or f"Hi {lead.name},\n\nJust checking in.\n\nBest,\nDamarley"
+        # Use the exact proven templates stored in the lead notes
+        notes = lead.notes or ""
+        touch_map = {2: "TOUCH 2", 4: "TOUCH 3", 7: "TOUCH 4"}
+        touch_header = touch_map.get(day, "TOUCH 2")
+
+        def _extract_section(text: str, header: str) -> str:
+            start = text.find(f"[{header}]")
+            if start == -1:
+                return ""
+            after = text.find("\n", start) + 1
+            next_bracket = text.find("\n[", after)
+            return (text[after:next_bracket] if next_bracket != -1 else text[after:]).strip()
+
+        body = _extract_section(notes, touch_header)
+        if not body:
+            # Fallback if template not found
+            body = f"Hi {lead.name.split()[0]},\n\nJust following up on my last message.\n\nWorth a quick chat?\n\n— Damarley"
+
+        subject_line = _extract_section(notes, "OUTREACH COPY")
+        # Extract subject from the copy block
+        subject = ""
+        for line in subject_line.split("\n"):
+            if line.startswith("Subject:"):
+                subject = line.replace("Subject:", "").strip()
+                break
+        if not subject:
+            subject = f"Re: {lead.company or lead.name}"
 
         result = send_via_sendgrid(to=lead.email, subject=subject, body=body)
         lead.status = models.LeadStatus.CONTACTED

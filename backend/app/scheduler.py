@@ -15,7 +15,7 @@ def schedule_lead_followup_sequence(lead_id: int):
     """Queue day-3, day-7, day-14 follow-up emails for a lead."""
     from backend.app.scheduler_jobs import send_followup_email
     now = datetime.utcnow()
-    for day in (3, 7, 14):
+    for day in (2, 4, 7):
         run_time = now + timedelta(days=day)
         job_id = f"followup_lead{lead_id}_day{day}"
         scheduler.add_job(

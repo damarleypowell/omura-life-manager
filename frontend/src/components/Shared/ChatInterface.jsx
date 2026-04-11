@@ -138,13 +138,38 @@ function ConversationList({ onSelect, onNew }) {
   );
 }
 
+// ── Tool icon map for live activity feed ──
+const TOOL_ICONS = {
+  thinking: { icon: '🧠', color: 'text-purple-400', label: 'Thinking' },
+  tool_start: { icon: '⚡', color: 'text-blue-400', label: 'Running' },
+  tool_done: { icon: '✓', color: 'text-emerald-400', label: 'Done' },
+  error: { icon: '✕', color: 'text-red-400', label: 'Error' },
+};
+
+const TOOL_NICE_NAMES = {
+  run_outreach_pipeline: 'Outreach pipeline',
+  send_outreach_email: 'Send outreach email',
+  bulk_send_outreach: 'Bulk email send',
+  request_internet: 'Web fetch',
+  create_lead: 'Create lead',
+  update_lead: 'Update lead',
+  create_task: 'Create task',
+  create_note: 'Save note',
+  create_calendar_event: 'Calendar event',
+  get_system_state: 'Load system state',
+  run_agent: 'Run agent',
+};
+
 // ── Single Conversation Chat View ──
 function ConversationChat({ conv, onBack }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  // Live activity feed while agent is working
+  const [activity, setActivity] = useState([]); // [{type, label, detail, ts}]
   const messagesEndRef = useRef(null);
+  const activityEndRef = useRef(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -161,6 +186,10 @@ function ConversationChat({ conv, onBack }) {
   }, [messages, loading]);
 
   useEffect(() => {
+    activityEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [activity]);
+
+  useEffect(() => {
     if (!loadingHistory) inputRef.current?.focus();
   }, [loadingHistory]);
 
@@ -171,30 +200,91 @@ function ConversationChat({ conv, onBack }) {
     setInput('');
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setLoading(true);
+    setActivity([]);
+
     try {
-      // If conv has no id yet (creation failed earlier), create it now
       let convId = conv.id;
       if (!convId) {
         const created = await convApi.create('New Conversation');
         convId = created.id;
         conv.id = convId;
       }
-      const data = await convApi.chat(convId, text);
+
+      // Use SSE streaming endpoint
+      const resp = await fetch(`/api/conversations/${convId}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(typeof window !== 'undefined' && localStorage.getItem('omura_token')
+            ? { Authorization: `Bearer ${localStorage.getItem('omura_token')}` }
+            : {}),
+        },
+        body: JSON.stringify({ message: text }),
+      });
+
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalReply = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE lines: "data: {...}\n\n"
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'done') {
+              finalReply = event.reply || '';
+            } else if (event.type === 'error') {
+              finalReply = `Error: ${event.message}`;
+            } else {
+              // Live activity event
+              const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              let label = '';
+              let detail = '';
+
+              if (event.type === 'thinking') {
+                label = event.message || 'Thinking...';
+              } else if (event.type === 'tool_start') {
+                label = TOOL_NICE_NAMES[event.tool] || event.tool?.replace(/_/g, ' ');
+                const inp = event.input || {};
+                const preview = inp.industries?.join(', ') || inp.locations?.join(', ') || inp.name || inp.to || inp.email || '';
+                if (preview) detail = preview;
+              } else if (event.type === 'tool_done') {
+                label = event.summary || (TOOL_NICE_NAMES[event.tool] || event.tool?.replace(/_/g, ' '));
+                detail = event.success === false ? 'failed' : '';
+              }
+
+              setActivity((prev) => [...prev, { type: event.type, label, detail, ts, tool: event.tool }]);
+            }
+          } catch {
+            // malformed JSON — skip
+          }
+        }
+      }
+
       setMessages((prev) => [
         ...prev,
-        {
-          role: 'assistant',
-          text: data.response || data.reply || 'No response.',
-          actions: data.actions || [],
-        },
+        { role: 'assistant', text: finalReply || 'No response.', actions: [] },
       ]);
     } catch (err) {
-      const msg = err?.message || err?.status || 'timeout';
+      const msg = err?.message || 'Connection failed';
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: `Error: ${msg}. Check console for details.`, actions: [] },
+        { role: 'assistant', text: `Error: ${msg}`, actions: [] },
       ]);
-      console.error('[Chat error]', err);
+      console.error('[Chat SSE error]', err);
     } finally {
       setLoading(false);
     }
@@ -219,7 +309,7 @@ function ConversationChat({ conv, onBack }) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
         {loadingHistory ? (
           <div className="space-y-3">
             {[1, 2].map((i) => (
@@ -261,12 +351,46 @@ function ConversationChat({ conv, onBack }) {
           ))
         )}
 
+        {/* Live activity feed */}
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-white/[0.04] border border-white/[0.06] rounded-2xl rounded-bl-md px-4 py-3 flex gap-1.5">
-              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div className="w-full max-w-[90%] bg-white/[0.03] border border-white/[0.06] rounded-2xl rounded-bl-md overflow-hidden">
+              {/* Activity header */}
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.05]">
+                <div className="flex gap-1">
+                  <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-[10px] text-slate-500 font-medium tracking-wide uppercase">Agent working</span>
+              </div>
+              {/* Activity rows */}
+              <div className="px-3 py-2 space-y-1.5 max-h-40 overflow-y-auto">
+                {activity.length === 0 ? (
+                  <div className="text-[11px] text-slate-600 py-1">Connecting to AI...</div>
+                ) : (
+                  activity.map((item, idx) => {
+                    const cfg = TOOL_ICONS[item.type] || TOOL_ICONS.tool_start;
+                    const isLatest = idx === activity.length - 1;
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex items-start gap-2 text-[11px] transition-opacity duration-300 ${isLatest ? 'opacity-100' : 'opacity-50'}`}
+                      >
+                        <span className={`flex-shrink-0 mt-px ${cfg.color} font-bold`}>{cfg.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-slate-300">{item.label}</span>
+                          {item.detail && (
+                            <span className="text-slate-600 ml-1 truncate">— {item.detail}</span>
+                          )}
+                        </div>
+                        <span className="flex-shrink-0 text-slate-700 font-mono text-[9px]">{item.ts}</span>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={activityEndRef} />
+              </div>
             </div>
           </div>
         )}

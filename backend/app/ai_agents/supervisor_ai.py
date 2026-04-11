@@ -40,6 +40,45 @@ from backend.app.utils.logging import OmuraLogger
 
 
 # ---------------------------------------------------------------------------
+# Tool result summarizer — human-readable one-liner for each tool
+# ---------------------------------------------------------------------------
+
+_TOOL_LABELS = {
+    "create_task": "Created task",
+    "update_task": "Updated task",
+    "create_lead": "Saved lead",
+    "update_lead": "Updated lead",
+    "create_note": "Saved note",
+    "send_email": "Sent email",
+    "run_outreach_pipeline": "Started outreach pipeline",
+    "send_outreach_email": "Queued outreach email",
+    "bulk_send_outreach": "Queued bulk send",
+    "request_internet": "Fetched web content",
+    "create_calendar_event": "Created calendar event",
+    "create_project": "Created project",
+    "run_agent": "Ran agent",
+    "get_system_state": "Loaded system state",
+}
+
+
+def _summarize_tool_result(tool_name: str, result: Any) -> str:
+    label = _TOOL_LABELS.get(tool_name, tool_name.replace("_", " ").title())
+    if not isinstance(result, dict):
+        return label
+    if result.get("error"):
+        return f"{label} — error: {str(result['error'])[:80]}"
+    # Pull out the most useful field
+    for key in ("message", "name", "title", "email", "to", "subject"):
+        if result.get(key):
+            return f"{label}: {str(result[key])[:80]}"
+    if result.get("queued"):
+        return f"{label} (background)"
+    if result.get("sent") is not None:
+        return f"{label}: {result['sent']} sent"
+    return label
+
+
+# ---------------------------------------------------------------------------
 # Tool definitions for Claude tool_use
 # ---------------------------------------------------------------------------
 
@@ -689,10 +728,12 @@ class SupervisorAI:
     _state_cache_time = 0
     STATE_CACHE_TTL = 60  # seconds
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, event_callback=None) -> None:
         self.db = db
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self.logger = OmuraLogger("supervisor_ai")
+        # Optional callback(event_type: str, data: dict) for real-time streaming
+        self._emit = event_callback or (lambda etype, data: None)
         self.logger.info("SupervisorAI initialized")
 
     # ------------------------------------------------------------------
@@ -746,12 +787,16 @@ class SupervisorAI:
             iteration = 0
             final_reply = ""
 
+            self._emit("thinking", {"message": "Thinking...", "iteration": 0})
+
             while iteration < self.MAX_TOOL_ITERATIONS:
                 iteration += 1
                 self.logger.info(
                     f"Claude API call — iteration {iteration}, "
                     f"messages: {len(messages)}"
                 )
+                if iteration > 1:
+                    self._emit("thinking", {"message": "Processing results...", "iteration": iteration})
 
                 response = self.client.messages.create(
                     model=self.MODEL,
@@ -802,6 +847,11 @@ class SupervisorAI:
                             f"Executing tool: {block.name} "
                             f"with input: {json.dumps(block.input, default=str)[:500]}"
                         )
+                        # Emit tool start event
+                        self._emit("tool_start", {
+                            "tool": block.name,
+                            "input": {k: v for k, v in block.input.items() if k not in ("body", "html_body")},
+                        })
 
                         result = self._execute_single_tool(
                             block.name, block.input
@@ -810,6 +860,13 @@ class SupervisorAI:
                             "tool": block.name,
                             "input": block.input,
                             "result": result,
+                        })
+
+                        # Emit tool result event
+                        self._emit("tool_done", {
+                            "tool": block.name,
+                            "success": result.get("success", True) if isinstance(result, dict) else True,
+                            "summary": _summarize_tool_result(block.name, result),
                         })
 
                         if block.name == "request_internet":
@@ -866,6 +923,8 @@ class SupervisorAI:
                 f"Chat complete — {len(actions_taken)} actions, "
                 f"{duration_ms}ms, internet_requested={internet_requested}"
             )
+
+            self._emit("done", {"reply": final_reply, "actions_count": len(actions_taken)})
 
             return {
                 "reply": final_reply,

@@ -9,9 +9,9 @@ _load_dotenv(dotenv_path=_os.path.normpath(
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", ".env")
 ), override=True)
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -19,6 +19,9 @@ from pydantic import BaseModel
 import httpx as _httpx
 import base64 as _base64
 import email as _email_lib
+import queue as _queue
+import threading as _threading
+import json as _json
 import re as _re
 from html.parser import HTMLParser as _HTMLParser
 
@@ -1234,6 +1237,80 @@ def conversation_chat(conv_id: int, request: ConversationChatRequest, db: Sessio
             "error": True,
             "timestamp": datetime.utcnow().isoformat(),
         }
+
+
+@app.post("/api/conversations/{conv_id}/chat/stream")
+def conversation_chat_stream(conv_id: int, request: ConversationChatRequest, db: Session = Depends(get_db)):
+    """
+    SSE streaming endpoint — emits real-time agent activity events while processing.
+    Events: thinking | tool_start | tool_done | done | error
+    Each event: data: {"type": ..., ...}\n\n
+    """
+    from backend.app.ai_agents.supervisor_ai import SupervisorAI
+    from backend.app.database.session import SessionLocal
+
+    conv = db.query(models.Conversation).filter(models.Conversation.id == conv_id).first()
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+
+    # Auto-title
+    msg_count = db.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == conv_id
+    ).count()
+    if msg_count == 0 and conv.title == "New Conversation":
+        conv.title = request.message[:60] + ("…" if len(request.message) > 60 else "")
+
+    user_msg = models.ChatMessage(role="user", content=request.message, conversation_id=conv_id)
+    db.add(user_msg)
+    conv.updated_at = datetime.utcnow()
+    db.commit()
+
+    event_q: _queue.Queue = _queue.Queue()
+
+    def on_event(etype: str, data: dict):
+        event_q.put({"type": etype, **data})
+
+    def run_chat():
+        bg_db = SessionLocal()
+        try:
+            supervisor = SupervisorAI(bg_db, event_callback=on_event)
+            response = supervisor.chat(request.message)
+            # Persist assistant message
+            asst_msg = models.ChatMessage(
+                role="assistant",
+                content=response.get("reply", ""),
+                agent_used="supervisor",
+                actions_taken=response.get("actions_taken", []),
+                conversation_id=conv_id,
+            )
+            bg_db.add(asst_msg)
+            bg_conv = bg_db.query(models.Conversation).filter(models.Conversation.id == conv_id).first()
+            if bg_conv:
+                bg_conv.updated_at = datetime.utcnow()
+            bg_db.commit()
+        except Exception as exc:
+            event_q.put({"type": "error", "message": str(exc)})
+        finally:
+            bg_db.close()
+            event_q.put(None)  # sentinel
+
+    _threading.Thread(target=run_chat, daemon=True).start()
+
+    def generate():
+        while True:
+            item = event_q.get()
+            if item is None:
+                break
+            yield f"data: {_json.dumps(item)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ══════════════════════════════════════════════

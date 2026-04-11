@@ -136,10 +136,13 @@ app.add_middleware(
         "http://localhost:3000", "http://localhost:3001", "http://localhost:3002",
         "https://omura-life-manager.vercel.app",
         "https://omura-life-manager-damarleypowells-projects.vercel.app",
+        # Allow all Vercel preview deployments
+        "https://*.vercel.app",
     ],
+    allow_origin_regex=r"https://omura-life-manager.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control", "X-Requested-With"],
 )
 
 # ── Security Headers Middleware ──

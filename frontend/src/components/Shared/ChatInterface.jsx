@@ -138,6 +138,12 @@ function ConversationList({ onSelect, onNew }) {
   );
 }
 
+// Direct Railway URL for SSE — bypasses Vercel's proxy which kills long-lived connections
+const RAILWAY_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== 'undefined' && window.__RAILWAY_URL__) ||
+  'https://omura-life-manager-production.up.railway.app';
+
 // ── Tool icon map for live activity feed ──
 const TOOL_ICONS = {
   thinking: { icon: '🧠', color: 'text-purple-400', label: 'Thinking' },
@@ -210,14 +216,14 @@ function ConversationChat({ conv, onBack }) {
         conv.id = convId;
       }
 
-      // Use SSE streaming endpoint
-      const resp = await fetch(`/api/conversations/${convId}/chat/stream`, {
+      // Call Railway directly — bypasses Vercel proxy which times out SSE connections
+      const token = typeof window !== 'undefined' ? localStorage.getItem('omura_token') : null;
+      const resp = await fetch(`${RAILWAY_BASE}/api/conversations/${convId}/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(typeof window !== 'undefined' && localStorage.getItem('omura_token')
-            ? { Authorization: `Bearer ${localStorage.getItem('omura_token')}` }
-            : {}),
+          'Accept': 'text/event-stream',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ message: text }),
       });

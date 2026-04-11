@@ -1828,12 +1828,12 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
         try:
             leads = (
                 self.db.query(Lead)
-                .filter(Lead.status == LeadStatus.NEW, Lead.notes.ilike("%[OUTREACH COPY]%"))
+                .filter(Lead.status == LeadStatus.NEW, Lead.email.isnot(None))
                 .limit(limit)
                 .all()
             )
             if not leads:
-                return {"success": True, "sent": 0, "message": "No leads with drafted copy found. Run the outreach pipeline first."}
+                return {"success": True, "sent": 0, "message": "No new leads with emails found."}
 
             agent = OutreachAI(self.db)
             sent = 0

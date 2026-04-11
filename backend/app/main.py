@@ -793,59 +793,43 @@ def communication_center(db: Session = Depends(get_db)):
 
 
 # ══════════════════════════════════════════════
-# Email Sending — SendGrid
+# Email Sending — Gmail SMTP
 # ══════════════════════════════════════════════
-
-def _send_via_sendgrid(to: str, subject: str, body: str, cc: str = None, html_body: str = None) -> dict:
-    """Send an email via SendGrid API. Returns result dict."""
-    import sendgrid as _sg
-    from sendgrid.helpers.mail import Mail, To, Cc, Content
-
-    api_key = settings.SENDGRID_API_KEY
-    from_email = settings.DEFAULT_FROM_EMAIL or settings.GMAIL_USER
-    if not api_key:
-        raise ValueError("SENDGRID_API_KEY not configured in .env")
-    if not from_email:
-        raise ValueError("DEFAULT_FROM_EMAIL not configured in .env")
-
-    client = _sg.SendGridAPIClient(api_key=api_key)
-    message = Mail(
-        from_email=from_email,
-        to_emails=to,
-        subject=subject,
-    )
-    message.add_content(Content("text/plain", body))
-    if html_body:
-        message.add_content(Content("text/html", html_body))
-    if cc:
-        message.cc = Cc(cc)
-
-    response = client.send(message)
-    if response.status_code not in (200, 201, 202):
-        raise Exception(f"SendGrid returned status {response.status_code}: {response.body}")
-
-    return {"sent": True, "to": to, "subject": subject,
-            "provider": "sendgrid", "status_code": response.status_code,
-            "timestamp": datetime.utcnow().isoformat()}
-
 
 @app.post("/api/email/send")
 def send_email(request: SendEmailRequest, db: Session = Depends(get_db)):
-    """Send an email via SendGrid."""
+    """Send an email via Gmail SMTP."""
+    from backend.app.email_utils import send_via_sendgrid as _gmail_send
     try:
-        result = _send_via_sendgrid(
+        result = _gmail_send(
             to=request.to,
             subject=request.subject,
             body=request.body,
             cc=request.cc,
         )
         crud.log_agent_action(db, "system", "send_email",
-            input_data={"to": request.to, "subject": request.subject, "provider": "sendgrid"},
+            input_data={"to": request.to, "subject": request.subject, "provider": "gmail"},
             status="success")
         return result
     except Exception as e:
         crud.log_agent_action(db, "system", "send_email", status="error", error_message=str(e))
         raise HTTPException(500, f"Email send failed: {str(e)}")
+
+
+@app.post("/api/email/test")
+def test_email(db: Session = Depends(get_db)):
+    """Quick test — sends a test email to the configured Gmail account itself."""
+    from backend.app.email_utils import send_via_sendgrid as _gmail_send
+    try:
+        gmail_user = settings.GMAIL_USER
+        result = _gmail_send(
+            to=gmail_user,
+            subject="Omura Email Test",
+            body=f"Gmail SMTP is working. Sent at {datetime.utcnow().isoformat()}",
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Test email failed: {str(e)}")
 
 
 # ══════════════════════════════════════════════

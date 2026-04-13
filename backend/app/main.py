@@ -882,7 +882,7 @@ def google_auth_callback(code: str, db: Session = Depends(get_db)):
     crud.log_agent_action(db, "system", "google_oauth_connected", status="success")
 
     # Redirect back to dashboard with success flag
-    frontend_url = _os.environ.get("FRONTEND_URL", "http://localhost:3001")
+    frontend_url = _os.environ.get("FRONTEND_URL", "https://omura-life-manager.vercel.app")
     return RedirectResponse(f"{frontend_url}/?google_connected=1")
 
 @app.get("/auth/google/status")
@@ -1227,12 +1227,13 @@ def conversation_chat(conv_id: int, request: ConversationChatRequest, db: Sessio
 
 
 @app.post("/api/conversations/{conv_id}/chat/stream")
-def conversation_chat_stream(conv_id: int, request: ConversationChatRequest, db: Session = Depends(get_db)):
+async def conversation_chat_stream(conv_id: int, request: ConversationChatRequest, db: Session = Depends(get_db)):
     """
-    SSE streaming endpoint — emits real-time agent activity events while processing.
+    Async SSE streaming endpoint — emits real-time agent activity events.
     Events: thinking | tool_start | tool_done | done | error
-    Each event: data: {"type": ..., ...}\n\n
+    Each line: data: {"type": ..., ...}\n\n
     """
+    import asyncio as _asyncio
     from backend.app.ai_agents.supervisor_ai import SupervisorAI
     from backend.app.database.session import SessionLocal
 
@@ -1252,17 +1253,18 @@ def conversation_chat_stream(conv_id: int, request: ConversationChatRequest, db:
     conv.updated_at = datetime.utcnow()
     db.commit()
 
-    event_q: _queue.Queue = _queue.Queue()
+    loop = _asyncio.get_event_loop()
+    event_q: _asyncio.Queue = _asyncio.Queue()
 
     def on_event(etype: str, data: dict):
-        event_q.put({"type": etype, **data})
+        # Called from background thread — schedule put on the event loop
+        loop.call_soon_threadsafe(event_q.put_nowait, {"type": etype, **data})
 
     def run_chat():
         bg_db = SessionLocal()
         try:
             supervisor = SupervisorAI(bg_db, event_callback=on_event)
             response = supervisor.chat(request.message)
-            # Persist assistant message
             asst_msg = models.ChatMessage(
                 role="assistant",
                 content=response.get("reply", ""),
@@ -1276,16 +1278,23 @@ def conversation_chat_stream(conv_id: int, request: ConversationChatRequest, db:
                 bg_conv.updated_at = datetime.utcnow()
             bg_db.commit()
         except Exception as exc:
-            event_q.put({"type": "error", "message": str(exc)})
+            loop.call_soon_threadsafe(event_q.put_nowait, {"type": "error", "message": str(exc)})
         finally:
             bg_db.close()
-            event_q.put(None)  # sentinel
+            loop.call_soon_threadsafe(event_q.put_nowait, None)  # sentinel
 
     _threading.Thread(target=run_chat, daemon=True).start()
 
-    def generate():
+    async def generate():
+        # Immediate keepalive so Railway / proxies don't kill the connection before AI responds
+        yield ": keepalive\n\n"
         while True:
-            item = event_q.get()
+            try:
+                # Wait up to 20s then send a keepalive ping to hold the connection open
+                item = await _asyncio.wait_for(event_q.get(), timeout=20)
+            except _asyncio.TimeoutError:
+                yield ": ping\n\n"
+                continue
             if item is None:
                 break
             yield f"data: {_json.dumps(item)}\n\n"
@@ -1296,6 +1305,7 @@ def conversation_chat_stream(conv_id: int, request: ConversationChatRequest, db:
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
         },
     )
 

@@ -741,29 +741,13 @@ class SupervisorAI:
     # ------------------------------------------------------------------
 
     def chat(self, user_message: str) -> Dict[str, Any]:
-        """Process a user message and return the AI's response.
+        """Process a user message — supervisor dispatches, never does heavy work inline.
 
-        This is the main entry point. It:
-        1. Saves the user message to chat history
-        2. Builds system prompt with current state
-        3. Loads conversation context and imported context
-        4. Calls Claude in a tool-use loop until a final text response
-        5. Saves the assistant response to chat history
-        6. Returns the response with metadata
-
-        Parameters
-        ----------
-        user_message : str
-            The message from Damarley.
-
-        Returns
-        -------
-        dict
-            {
-                "reply": str,           # The assistant's text response
-                "actions_taken": list,   # Actions performed via tool calls
-                "internet_requested": bool  # Whether internet access was requested
-            }
+        Architecture:
+        - One (sometimes two) Claude API calls maximum
+        - Heavy work (scraping, email, agent delegation) always runs in background threads
+        - System prompt is small and static — no full DB state dump
+        - State is only fetched when Claude explicitly calls get_system_state tool
         """
         start_time = time.time()
         actions_taken: List[Dict[str, Any]] = []

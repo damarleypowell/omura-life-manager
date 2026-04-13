@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # ── OAuth 2.0 Credentials ──
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+    GOOGLE_REDIRECT_URI: str = "https://omura-life-manager-production.up.railway.app/auth/google/callback"
 
     FACEBOOK_APP_ID: Optional[str] = None
     FACEBOOK_APP_SECRET: Optional[str] = None

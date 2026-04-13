@@ -263,9 +263,10 @@ def validate_jwt_token(
 
 
 # ---------------------------------------------------------------------------
-# Public API — OAuth Token Storage
+# Public API — OAuth Token Storage (PostgreSQL-backed, disk fallback)
 # ---------------------------------------------------------------------------
-
+# Tokens are stored in the Credential table so they survive Railway redeploys.
+# Disk is kept as a read fallback only, for local dev migration.
 
 def _token_path(provider: str) -> Path:
     """Return the filesystem path for a provider's encrypted token file."""
@@ -273,40 +274,82 @@ def _token_path(provider: str) -> Path:
     return _TOKEN_STORE_DIR / f"{safe_name}.token"
 
 
+def _cred_name(provider: str) -> str:
+    return f"oauth_token_{provider}"
+
+
 def store_token(provider: str, token_data: Dict[str, Any]) -> None:
-    """Persist an OAuth token for *provider* to encrypted storage.
+    """Persist an OAuth token for *provider* to the PostgreSQL Credential table.
 
-    The token data dict is JSON-serialised, encrypted with the application
-    ``ENCRYPTION_KEY``, and written to disk.
-
-    Parameters
-    ----------
-    provider:
-        OAuth provider name (e.g. ``"google"``, ``"facebook"``).
-    token_data:
-        The token payload — typically contains ``access_token``,
-        ``refresh_token``, ``expires_at``, etc.
+    Falls back to disk if the DB is unavailable (e.g. local dev without DB).
     """
-    _TOKEN_STORE_DIR.mkdir(parents=True, exist_ok=True)
     plaintext = json.dumps(token_data, default=str)
-    encrypted = encrypt_data(plaintext)
-    _token_path(provider).write_text(encrypted, encoding="utf-8")
+    encrypted_str = encrypt_data(plaintext)
+    encrypted_bytes = encrypted_str.encode("utf-8")
+
+    try:
+        from backend.app.database.session import SessionLocal
+        from backend.app.database.models import Credential
+        from datetime import datetime as _dt
+
+        db = SessionLocal()
+        try:
+            cred = db.query(Credential).filter(
+                Credential.name == _cred_name(provider)
+            ).first()
+            if cred:
+                cred.encrypted_value = encrypted_bytes
+                cred.updated_at = _dt.utcnow()
+            else:
+                cred = Credential(
+                    name=_cred_name(provider),
+                    service=provider,
+                    credential_type="oauth_token",
+                    encrypted_value=encrypted_bytes,
+                    description=f"{provider} OAuth token (auto-stored)",
+                )
+                db.add(cred)
+            db.commit()
+            return
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    # Fallback: disk
+    _TOKEN_STORE_DIR.mkdir(parents=True, exist_ok=True)
+    _token_path(provider).write_text(encrypted_str, encoding="utf-8")
 
 
 def get_token(provider: str) -> Optional[Dict[str, Any]]:
     """Retrieve a stored OAuth token for *provider*.
 
-    Parameters
-    ----------
-    provider:
-        OAuth provider name.
-
-    Returns
-    -------
-    dict or None
-        The decrypted token data, or ``None`` if no token exists for this
-        provider or decryption fails.
+    Checks PostgreSQL first, then falls back to legacy disk files.
     """
+    # 1. Try DB
+    try:
+        from backend.app.database.session import SessionLocal
+        from backend.app.database.models import Credential
+
+        db = SessionLocal()
+        try:
+            cred = db.query(Credential).filter(
+                Credential.name == _cred_name(provider)
+            ).first()
+            if cred and cred.encrypted_value:
+                enc = (
+                    cred.encrypted_value.decode("utf-8")
+                    if isinstance(cred.encrypted_value, (bytes, bytearray))
+                    else cred.encrypted_value
+                )
+                plaintext = decrypt_data(enc)
+                return json.loads(plaintext)
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    # 2. Fallback: disk (legacy / local dev)
     path = _token_path(provider)
     if not path.exists():
         return None
@@ -319,15 +362,35 @@ def get_token(provider: str) -> Optional[Dict[str, Any]]:
 
 
 def delete_token(provider: str) -> bool:
-    """Delete the stored OAuth token for *provider*.
+    """Delete the stored OAuth token for *provider* from DB and disk.
 
-    Returns
-    -------
-    bool
-        ``True`` if a token file was deleted, ``False`` if none existed.
+    Returns ``True`` if anything was deleted.
     """
+    deleted = False
+
+    try:
+        from backend.app.database.session import SessionLocal
+        from backend.app.database.models import Credential
+
+        db = SessionLocal()
+        try:
+            rows = db.query(Credential).filter(
+                Credential.name == _cred_name(provider)
+            ).delete()
+            db.commit()
+            if rows:
+                deleted = True
+        finally:
+            db.close()
+    except Exception:
+        pass
+
     path = _token_path(provider)
     if path.exists():
-        path.unlink()
-        return True
-    return False
+        try:
+            path.unlink()
+            deleted = True
+        except OSError:
+            pass
+
+    return deleted

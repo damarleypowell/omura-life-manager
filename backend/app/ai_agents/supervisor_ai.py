@@ -594,6 +594,21 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "get_system_state",
+        "description": (
+            "Fetch the current live state of the Omura system: tasks due today, "
+            "overdue tasks, active projects, hot leads, upcoming calendar events, "
+            "unread communications, content pipeline, and recent KPIs. "
+            "Use this when Damarley asks for a status update, briefing, "
+            "or 'what's going on', or before generating a daily agenda."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
         "name": "send_email",
         "description": (
             "Send a freeform email to ANY email address via Gmail API. "
@@ -1364,6 +1379,7 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             "send_outreach_email": self._tool_send_outreach_email,
             "bulk_send_outreach": self._tool_bulk_send_outreach,
             "send_email": self._tool_send_email,
+            "get_system_state": self._tool_get_system_state,
         }
 
         handler = dispatch.get(tool_name)
@@ -1984,13 +2000,29 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             "message": f"Bulk send queued for {min(lead_count, limit)} leads. Sending in background — check agent logs for delivery confirmation.",
         }
 
+    def _tool_get_system_state(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a live snapshot of the system state."""
+        state = self._get_current_state()
+        # Serialize datetimes and enums
+        def _clean(obj):
+            if isinstance(obj, dict):
+                return {k: _clean(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_clean(i) for i in obj]
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if hasattr(obj, 'value'):
+                return obj.value
+            return obj
+        return {"success": True, "state": _clean(state)}
+
     def _tool_send_email(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Send a freeform email to any address via Gmail API."""
         from backend.app.email_utils import send_via_sendgrid
-        to = params.get("to", "").strip()
-        subject = params.get("subject", "").strip()
-        body = params.get("body", "").strip()
-        cc = params.get("cc", "").strip() or None
+        to = (params.get("to") or "").strip()
+        subject = (params.get("subject") or "").strip()
+        body = (params.get("body") or "").strip()
+        cc = (params.get("cc") or "").strip() or None
 
         if not to or not subject or not body:
             return {"success": False, "error": "to, subject, and body are all required"}

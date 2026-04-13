@@ -1333,24 +1333,10 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
     """Main conversational AI endpoint. Routes through SupervisorAI."""
     from backend.app.ai_agents.supervisor_ai import SupervisorAI
 
-    # Save user message
-    user_msg = models.ChatMessage(role="user", content=request.message)
-    db.add(user_msg)
-    db.commit()
-
     try:
         supervisor = SupervisorAI(db)
+        # supervisor.chat() saves both user and assistant messages internally
         response = supervisor.chat(request.message)
-
-        # Save assistant message
-        assistant_msg = models.ChatMessage(
-            role="assistant",
-            content=response.get("reply", ""),
-            agent_used="supervisor",
-            actions_taken=response.get("actions_taken", []),
-        )
-        db.add(assistant_msg)
-        db.commit()
 
         return {
             "reply": response.get("reply", ""),
@@ -1366,6 +1352,14 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             "error": True,
             "timestamp": datetime.utcnow().isoformat(),
         }
+
+
+@app.delete("/api/chat/clear")
+def clear_chat_history(db: Session = Depends(get_db)):
+    """Wipe all chat history. Use when chat context is poisoned."""
+    deleted = db.query(models.ChatMessage).delete()
+    db.commit()
+    return {"deleted": deleted, "message": "Chat history cleared."}
 
 @app.get("/api/chat/history")
 def chat_history(limit: int = 50, db: Session = Depends(get_db)):

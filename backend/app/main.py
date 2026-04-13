@@ -115,6 +115,17 @@ def _run_migrations():
                 ))
                 conn.commit()
 
+    # Add 'invalid' value to leadstatus enum if on PostgreSQL
+    if not engine.url.drivername.startswith("sqlite"):
+        with engine.connect() as conn:
+            try:
+                conn.execute(_sql_text(
+                    "ALTER TYPE leadstatus ADD VALUE IF NOT EXISTS 'invalid'"
+                ))
+                conn.commit()
+            except Exception:
+                pass  # already exists or not a PG enum type
+
 try:
     _run_migrations()
 except Exception as _mig_err:

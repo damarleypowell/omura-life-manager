@@ -45,6 +45,7 @@ class LeadStatus(str, enum.Enum):
     PROPOSAL = "proposal"
     WON = "won"
     LOST = "lost"
+    INVALID = "invalid"  # bad email / bounce / generic address — never retry
 
 
 class Platform(str, enum.Enum):

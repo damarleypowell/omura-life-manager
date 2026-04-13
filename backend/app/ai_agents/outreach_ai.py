@@ -1132,17 +1132,28 @@ class OutreachAI:
             name = lead_data.get("name", "Unknown")
             company = lead_data.get("company", "")
 
-            # Step 2: Verify email — use Hunter if available, else MX check
-            verification = hunter_verify_email(email)
-            if not verification["valid"]:
-                self.logger.debug(f"Skipping {email}: {verification['reason']}")
-                skipped_invalid += 1
-                continue
-
-            # Step 3: Skip duplicates
+            # Step 2: Cross-reference against ALL known leads (any status, including INVALID)
+            # before doing any work — don't re-process emails we've already seen.
             existing = self.db.query(Lead).filter(Lead.email == email).first()
             if existing:
                 skipped_duplicate += 1
+                continue
+
+            # Step 3: Verify email — use Hunter if available, else MX check
+            verification = hunter_verify_email(email)
+            if not verification["valid"]:
+                self.logger.debug(f"Invalid email {email}: {verification['reason']} — saving as INVALID")
+                skipped_invalid += 1
+                # Save as INVALID so we never retry and can audit the dud list
+                dud = Lead(
+                    name=name[:255],
+                    email=email[:255],
+                    company=company[:255],
+                    source=lead_data.get("source", "outreach_pipeline"),
+                    status=LeadStatus.INVALID,
+                    notes=f"[INVALID] Reason: {verification['reason']}",
+                )
+                self.db.add(dud)
                 continue
 
             # Step 4: Research the lead
@@ -1285,5 +1296,13 @@ class OutreachAI:
             self.logger.info(f"Initial outreach sent to {lead.email}")
             return {"success": True, "to": lead.email, "subject": subject}
         except Exception as exc:
-            self.logger.error(f"Send failed for {lead.email}: {exc}")
-            return {"success": False, "error": str(exc)}
+            error_msg = str(exc)
+            self.logger.error(f"Send failed for {lead.email}: {error_msg}")
+            # Mark as INVALID so bulk send never retries this lead
+            try:
+                lead.status = LeadStatus.INVALID
+                lead.notes = (lead.notes or "") + f"\n[SEND FAILED] {error_msg[:200]}"
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+            return {"success": False, "error": error_msg}

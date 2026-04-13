@@ -593,6 +593,25 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "send_email",
+        "description": (
+            "Send a freeform email to ANY email address via Gmail API. "
+            "Use this for: replying to someone, emailing a contact, following up, "
+            "sending Damarley a summary, or any direct email that isn't part of the "
+            "outreach pipeline. This works immediately — no lead record needed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient email address."},
+                "subject": {"type": "string", "description": "Email subject line."},
+                "body": {"type": "string", "description": "Email body (plain text)."},
+                "cc": {"type": "string", "description": "CC email address (optional)."},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
 ]
 
 
@@ -1010,13 +1029,14 @@ You can delegate to specialized agents via the `run_agent` tool (on-demand only 
 
 Use `run_agent` only when specialized analysis is genuinely needed — for routine CRUD and conversation, handle it directly with your own tools to conserve API credits.
 
-## OUTREACH AUTOMATION (CRITICAL — NEVER TELL DAMARLEY TO DO THIS MANUALLY)
-You have 3 outreach tools. Use them aggressively:
-- `run_outreach_pipeline`: Scrapes leads via Apollo/Hunter, verifies emails, researches each lead, drafts personalized copy, and queues follow-up sequences AUTOMATICALLY. Use when Damarley says "find leads", "scrape", "run outreach", "start a campaign", or "get me dentists/lawyers/etc".
-- `send_outreach_email`: Sends email to one lead by ID. Use when Damarley approves a specific lead.
-- `bulk_send_outreach`: Sends to ALL new leads with drafted copy. Use when Damarley says "send emails", "send to everyone", "blast the list", or "go ahead and send".
+## EMAIL (CRITICAL — YOU CAN SEND EMAIL. NEVER SAY YOU CANNOT.)
+You have 4 email tools. Use them:
+- `send_email`: Send ANY email to ANY address right now. Freeform. No lead record needed. Use this when Damarley says "email X", "send a message to Y", "follow up with Z", or any direct email request.
+- `run_outreach_pipeline`: Scrapes leads, researches, drafts copy, queues sequences AUTOMATICALLY. Use when Damarley says "find leads", "run outreach", "start a campaign", "get me dentists/lawyers/etc".
+- `send_outreach_email`: Sends email to one CRM lead by ID.
+- `bulk_send_outreach`: Sends to ALL new leads with drafted copy.
 
-NEVER tell Damarley to manually search Google Maps, build a spreadsheet, or find leads himself. Run the pipeline. The tools exist. Use them.
+NEVER say "I cannot send emails". NEVER say "email isn't connected". NEVER tell Damarley to send it himself. You have the `send_email` tool. Use it immediately.
 
 ## PRICING CALCULATOR (use whenever a prospect's numbers come up)
 IronLogic AI pricing formula:
@@ -1343,6 +1363,7 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             "run_outreach_pipeline": self._tool_run_outreach_pipeline,
             "send_outreach_email": self._tool_send_outreach_email,
             "bulk_send_outreach": self._tool_bulk_send_outreach,
+            "send_email": self._tool_send_email,
         }
 
         handler = dispatch.get(tool_name)
@@ -1962,6 +1983,35 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             "total_leads": lead_count,
             "message": f"Bulk send queued for {min(lead_count, limit)} leads. Sending in background — check agent logs for delivery confirmation.",
         }
+
+    def _tool_send_email(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a freeform email to any address via Gmail API."""
+        from backend.app.email_utils import send_via_sendgrid
+        to = params.get("to", "").strip()
+        subject = params.get("subject", "").strip()
+        body = params.get("body", "").strip()
+        cc = params.get("cc", "").strip() or None
+
+        if not to or not subject or not body:
+            return {"success": False, "error": "to, subject, and body are all required"}
+
+        try:
+            result = send_via_sendgrid(to=to, subject=subject, body=body, cc=cc)
+            crud.log_agent_action(
+                self.db, "supervisor", "tool:send_email",
+                {"to": to, "subject": subject},
+                result, "success",
+            )
+            return {
+                "success": True,
+                "sent": True,
+                "to": to,
+                "subject": subject,
+                "provider": result.get("provider", "gmail"),
+                "message": f"Email sent to {to} — subject: \"{subject}\"",
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     # ------------------------------------------------------------------
     # Internet access request

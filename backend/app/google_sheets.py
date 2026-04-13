@@ -164,7 +164,7 @@ def export_pipeline_to_sheets(db, access_token: str) -> dict:
             lead.name or "",
             lead.email or "",
             lead.company or "",
-            lead.title or "",
+            (lead.extra_data or {}).get("title", "") if lead.extra_data else "",
             lead.status.value if lead.status else "new",
             str(round(lead.score or 0, 1)),
             lead.source or "",
@@ -251,8 +251,8 @@ def import_leads_from_sheet(db, access_token: str, sheet_id: str, sheet_tab: str
             name=name[:255],
             email=email[:255],
             company=company[:255],
-            title=title[:255],
             source="sheets_import",
+            extra_data={"title": title[:255], "website": website[:255]} if (title or website) else {},
             status=LeadStatus.NEW,
             notes=(
                 f"[RESEARCH]\nIndustry: {industry}\nWebsite: {website}\n"

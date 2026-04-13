@@ -165,14 +165,49 @@ class ProjectAI:
         today = datetime.now(timezone.utc).date().isoformat()
         tasks = self._fetch_todays_tasks()
         events = self._fetch_todays_events()
+        projects = self._fetch_active_projects()
+
+        task_summary = (
+            "\n".join(
+                f"- [{t['priority'].upper()}] {t['title']}"
+                + (f" (due {t['due_date']})" if t.get("due_date") else "")
+                + (f" [{t['status']}]" if t.get("status") != "todo" else "")
+                for t in tasks
+            )
+            or "No tasks due today in the database."
+        )
+        event_summary = (
+            "\n".join(
+                f"- {e['title']} at {e['start']}" + (f" → {e['end']}" if e.get("end") else "")
+                for e in events
+            )
+            or "No calendar events found."
+        )
+        project_summary = (
+            "\n".join(
+                f"- {p['name']} ({p['status']}, {p['completed_tasks']}/{p['total_tasks']} tasks done"
+                + (f", deadline {p['deadline']}" if p.get("deadline") else "") + ")"
+                for p in projects
+            )
+            or "No active projects."
+        )
 
         prompt = (
-            f"Generate an optimized daily agenda for {today}.\n"
-            f"Tasks due: {tasks}\n"
-            f"Calendar events: {events}\n"
-            f"Create time blocks, identify focus areas, and provide tips."
+            f"Generate an optimized daily agenda for {today} for Damarley Powell, founder of IronLogic AI.\n\n"
+            f"TASKS DUE TODAY OR IN PROGRESS:\n{task_summary}\n\n"
+            f"CALENDAR EVENTS:\n{event_summary}\n\n"
+            f"ACTIVE PROJECTS:\n{project_summary}\n\n"
+            f"Create realistic time blocks based on ONLY the real tasks and events above. "
+            f"If there are no tasks or events, say so and suggest proactive work based on the projects. "
+            f"Identify the top 3 focus areas and give actionable productivity tips."
         )
         result = self._call_ai(prompt, context={"task": "daily_agenda"})
+
+        # Build priority_tasks list from real DB tasks (used by scheduler_jobs)
+        priority_tasks = [
+            {"id": t["id"], "title": t["title"], "priority": t["priority"], "status": t["status"]}
+            for t in tasks
+        ]
 
         agenda = {
             "date": today,
@@ -180,6 +215,9 @@ class ProjectAI:
             "focus_areas": result.get("focus_areas", []),
             "estimated_productive_hours": result.get("estimated_productive_hours", 6.0),
             "tips": result.get("tips", []),
+            "priority_tasks": priority_tasks,
+            "tasks_count": len(tasks),
+            "events_count": len(events),
         }
 
         self.logger.info(
@@ -245,51 +283,172 @@ class ProjectAI:
     # ------------------------------------------------------------------
 
     def _fetch_active_projects(self) -> list[dict]:
-        """Fetch active projects from the database. Returns mock data as fallback."""
+        """Fetch active projects from the database."""
         try:
-            self.logger.debug("Querying active projects")
-            return []
+            from backend.app.database import models
+            projects = (
+                self.db.query(models.Project)
+                .filter(models.Project.status != models.TaskStatus.DONE)
+                .order_by(models.Project.priority.desc(), models.Project.deadline.asc())
+                .limit(20)
+                .all()
+            )
+            result = []
+            for p in projects:
+                total = len(p.tasks)
+                done = sum(1 for t in p.tasks if t.status == models.TaskStatus.DONE)
+                in_prog = sum(1 for t in p.tasks if t.status == models.TaskStatus.IN_PROGRESS)
+                blocked = sum(1 for t in p.tasks if t.status == models.TaskStatus.BLOCKED)
+                result.append({
+                    "id": p.id,
+                    "name": p.name,
+                    "description": p.description or "",
+                    "status": p.status.value if p.status else "todo",
+                    "priority": p.priority.value if p.priority else "medium",
+                    "deadline": p.deadline.isoformat() if p.deadline else None,
+                    "progress_pct": p.progress_pct or 0.0,
+                    "total_tasks": total,
+                    "completed_tasks": done,
+                    "in_progress_tasks": in_prog,
+                    "blocked_tasks": blocked,
+                    "todo_tasks": total - done - in_prog - blocked,
+                })
+            return result
         except Exception as exc:
             self.logger.warning("Failed to fetch projects", error=str(exc))
             return []
 
     def _fetch_project_details(self, project_id: int) -> dict:
-        """Fetch detailed project data including tasks and dependencies."""
+        """Fetch detailed project data including tasks."""
         try:
-            self.logger.debug("Fetching project details", project_id=project_id)
+            from backend.app.database import models
+            p = self.db.query(models.Project).filter(models.Project.id == project_id).first()
+            if not p:
+                return {"id": project_id}
+            total = len(p.tasks)
+            done = sum(1 for t in p.tasks if t.status == models.TaskStatus.DONE)
+            in_prog = sum(1 for t in p.tasks if t.status == models.TaskStatus.IN_PROGRESS)
+            blocked = sum(1 for t in p.tasks if t.status == models.TaskStatus.BLOCKED)
+            # Rough velocity: tasks completed in last 7 days
+            week_ago = datetime.utcnow() - timedelta(days=7)
+            recent_done = sum(
+                1 for t in p.tasks
+                if t.status == models.TaskStatus.DONE and t.updated_at and t.updated_at >= week_ago
+            )
+            velocity = f"{recent_done} tasks/week"
+            tasks_data = [
+                {
+                    "id": t.id, "title": t.title,
+                    "status": t.status.value if t.status else "todo",
+                    "priority": t.priority.value if t.priority else "medium",
+                    "due_date": t.due_date.isoformat() if t.due_date else None,
+                }
+                for t in p.tasks[:30]
+            ]
             return {
-                "id": project_id,
-                "total_tasks": 24,
-                "completed_tasks": 16,
-                "in_progress_tasks": 5,
-                "blocked_tasks": 1,
-                "todo_tasks": 2,
-                "remaining_hours": 38.5,
-                "velocity": "4.2 tasks/week",
+                "id": p.id,
+                "name": p.name,
+                "description": p.description or "",
+                "status": p.status.value if p.status else "todo",
+                "total_tasks": total,
+                "completed_tasks": done,
+                "in_progress_tasks": in_prog,
+                "blocked_tasks": blocked,
+                "todo_tasks": total - done - in_prog - blocked,
+                "remaining_hours": round((total - done) * 2.5, 1),
+                "velocity": velocity,
                 "dependencies": [],
-                "team_capacity": "2 developers, 1 designer",
-                "tasks": [],
+                "tasks": tasks_data,
             }
         except Exception as exc:
-            self.logger.warning(
-                "Failed to fetch project details", project_id=project_id, error=str(exc),
-            )
+            self.logger.warning("Failed to fetch project details", project_id=project_id, error=str(exc))
             return {"id": project_id}
 
     def _fetch_todays_tasks(self) -> list[dict]:
-        """Fetch tasks due today from the database."""
+        """Fetch tasks due today or overdue (not done) from the database."""
         try:
-            self.logger.debug("Fetching today's tasks")
-            return []
+            from backend.app.database import models
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+
+            # Tasks due today or overdue, not done
+            due_today = (
+                self.db.query(models.Task)
+                .filter(
+                    models.Task.status != models.TaskStatus.DONE,
+                    models.Task.due_date < today_end,
+                )
+                .order_by(models.Task.priority.desc(), models.Task.due_date.asc())
+                .limit(20)
+                .all()
+            )
+
+            # Also grab in-progress tasks (no due date filter)
+            in_progress = (
+                self.db.query(models.Task)
+                .filter(models.Task.status == models.TaskStatus.IN_PROGRESS)
+                .order_by(models.Task.priority.desc())
+                .limit(10)
+                .all()
+            )
+
+            seen_ids = set()
+            result = []
+            for t in due_today + in_progress:
+                if t.id in seen_ids:
+                    continue
+                seen_ids.add(t.id)
+                result.append({
+                    "id": t.id,
+                    "title": t.title,
+                    "description": t.description or "",
+                    "status": t.status.value if t.status else "todo",
+                    "priority": t.priority.value if t.priority else "medium",
+                    "due_date": t.due_date.isoformat() if t.due_date else None,
+                    "project_id": t.project_id,
+                })
+            return result
         except Exception as exc:
             self.logger.warning("Failed to fetch today's tasks", error=str(exc))
             return []
 
     def _fetch_todays_events(self) -> list[dict]:
-        """Fetch calendar events for today."""
+        """Fetch today's calendar events from Google Calendar if connected."""
         try:
-            self.logger.debug("Fetching today's events")
-            return []
+            from backend.app.google_utils import get_google_access_token
+            import httpx as _httpx
+            access_token = get_google_access_token()
+            if not access_token:
+                return []
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+            resp = _httpx.get(
+                "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={
+                    "timeMin": today_start.isoformat() + "Z",
+                    "timeMax": today_end.isoformat() + "Z",
+                    "singleEvents": "true",
+                    "orderBy": "startTime",
+                    "maxResults": 20,
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return []
+            events = []
+            for item in resp.json().get("items", []):
+                start = item.get("start", {})
+                end = item.get("end", {})
+                events.append({
+                    "id": item.get("id"),
+                    "title": item.get("summary", "(no title)"),
+                    "start": start.get("dateTime") or start.get("date"),
+                    "end": end.get("dateTime") or end.get("date"),
+                    "description": item.get("description", ""),
+                    "location": item.get("location", ""),
+                })
+            return events
         except Exception as exc:
             self.logger.warning("Failed to fetch today's events", error=str(exc))
             return []

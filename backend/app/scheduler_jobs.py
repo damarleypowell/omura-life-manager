@@ -6,10 +6,9 @@ from datetime import datetime
 
 
 def send_followup_email(lead_id: int, day: int):
-    """Send a scheduled follow-up email for a lead on day 3, 7, or 14."""
+    """Send a scheduled follow-up email for a lead on day 2, 4, or 7."""
     from backend.app.database.session import SessionLocal
     from backend.app.database import models, crud
-    from backend.app.ai_agents.crm_ai import CrmAI
     from backend.app.email_utils import send_via_sendgrid
 
     db = SessionLocal()
@@ -132,7 +131,9 @@ def scheduled_inbox_triage():
         inbox = InboxAI(db)
         result = inbox.process_inbox()
 
-        _auto_classify_leads(db, result.get("triaged", []))
+        triaged = result.get("triaged", [])
+        _auto_classify_leads(db, triaged)
+        _detect_lead_replies(db, triaged)
 
         crud.log_agent_action(db, "scheduler", "inbox_triage", {}, {
             "processed": result.get("total_processed", 0),
@@ -199,6 +200,43 @@ def _auto_classify_leads(db, triaged_messages: list):
         db.add(lead)
         db.flush()
         schedule_lead_followup_sequence(lead.id)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _detect_lead_replies(db, triaged_messages: list):
+    """If a triaged email is from a known lead, mark them as REPLIED and cancel follow-ups."""
+    import re as _re
+    from backend.app.database import models
+    from backend.app.scheduler import scheduler
+
+    for msg in triaged_messages:
+        sender = msg.get("sender", "")
+        email_match = _re.search(r'<([^>]+)>', sender)
+        email_addr = email_match.group(1) if email_match else sender.split()[0] if sender else ""
+        if not email_addr or "@" not in email_addr:
+            continue
+
+        lead = db.query(models.Lead).filter(models.Lead.email == email_addr).first()
+        if not lead:
+            continue
+        if lead.status in (models.LeadStatus.WON, models.LeadStatus.LOST, models.LeadStatus.REPLIED):
+            continue
+
+        # Mark lead as QUALIFIED (replied/responded — move them up the pipeline)
+        lead.status = models.LeadStatus.QUALIFIED
+        lead.last_contact = datetime.utcnow()
+
+        # Cancel any pending follow-up jobs for this lead
+        for day in (2, 4, 7):
+            job_id = f"followup_lead{lead.id}_day{day}"
+            try:
+                scheduler.remove_job(job_id)
+            except Exception:
+                pass  # Job already ran or doesn't exist
 
     try:
         db.commit()

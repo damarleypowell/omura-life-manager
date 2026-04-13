@@ -1,18 +1,48 @@
 """
 Shared scheduler instance and job registration — avoids circular imports.
 Imported by main.py (to start) and by agents (to schedule jobs).
+
+Uses SQLAlchemy job store so follow-up sequences survive Railway restarts/redeploys.
 """
 from __future__ import annotations
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.executors.pool import ThreadPoolExecutor
 
-scheduler = BackgroundScheduler(timezone="UTC")
+
+def _make_scheduler() -> BackgroundScheduler:
+    """Build scheduler with PostgreSQL job store for persistence across restarts."""
+    from backend.app.config import settings
+
+    jobstores = {
+        "default": SQLAlchemyJobStore(url=settings.DATABASE_URL),
+    }
+    executors = {
+        "default": ThreadPoolExecutor(10),
+    }
+    job_defaults = {
+        "coalesce": True,       # merge missed runs into one
+        "max_instances": 1,     # prevent overlapping executions
+        "misfire_grace_time": 3600,  # run jobs up to 1h late if server was down
+    }
+
+    return BackgroundScheduler(
+        jobstores=jobstores,
+        executors=executors,
+        job_defaults=job_defaults,
+        timezone="UTC",
+    )
+
+
+scheduler = _make_scheduler()
 
 
 def schedule_lead_followup_sequence(lead_id: int):
-    """Queue day-3, day-7, day-14 follow-up emails for a lead."""
+    """Queue day-2, day-4, day-7 follow-up emails for a lead.
+
+    Jobs are persisted in PostgreSQL — survive Railway restarts.
+    """
     from backend.app.scheduler_jobs import send_followup_email
     now = datetime.utcnow()
     for day in (2, 4, 7):

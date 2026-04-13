@@ -30,9 +30,19 @@ class _HtmlStripper(_HTMLParser):
     def __init__(self):
         super().__init__()
         self._parts = []
+        self._skip = False  # True while inside <style> or <script>
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script"):
+            self._skip = True
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script"):
+            self._skip = False
 
     def handle_data(self, data):
-        self._parts.append(data)
+        if not self._skip:
+            self._parts.append(data)
 
     def get_text(self):
         return _re.sub(r'\s+', ' ', ''.join(self._parts)).strip()
@@ -46,6 +56,8 @@ def _strip_html(html: str) -> str:
         s.feed(html)
         return s.get_text()
     except Exception:
+        # Fallback: strip style/script blocks then tags
+        html = _re.sub(r'<(style|script)[^>]*>.*?</(style|script)>', ' ', html, flags=_re.DOTALL | _re.IGNORECASE)
         return _re.sub(r'\s+', ' ', _re.sub(r'<[^>]+>', ' ', html)).strip()
 
 

@@ -851,7 +851,7 @@ def google_auth_start():
     from urllib.parse import urlencode
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI.strip(),
         "response_type": "code",
         "scope": _GOOGLE_SCOPES,
         "access_type": "offline",
@@ -869,7 +869,7 @@ def google_auth_callback(code: str, db: Session = Depends(get_db)):
         "code": code,
         "client_id": settings.GOOGLE_CLIENT_ID,
         "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI.strip(),
         "grant_type": "authorization_code",
     })
 

@@ -840,7 +840,7 @@ _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_SCOPES = " ".join([
     "openid", "email", "profile",
-    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar",
 ])
 

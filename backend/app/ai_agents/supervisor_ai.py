@@ -587,7 +587,7 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "limit": {
                     "type": "integer",
-                    "description": "Max emails to send in this batch. Default 50.",
+                    "description": "Max emails to send in this run. Hard-capped at 15 to avoid spam filters. Default 15.",
                 },
             },
             "required": [],
@@ -1946,10 +1946,19 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
         }
 
     def _tool_bulk_send_outreach(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Send outreach emails to all new leads — runs in background thread to avoid timeout."""
+        """Send outreach emails to all new leads — runs in background thread to avoid timeout.
+
+        Rate-limited: sends BATCH_SIZE emails, pauses BATCH_DELAY_SECS, repeats.
+        Keeps Gmail happy and avoids spam-filter triggers on bulk sends.
+        """
+        import time as _time
         from backend.app.ai_agents.outreach_ai import OutreachAI
         from backend.app.database.session import SessionLocal
-        limit = params.get("limit", 50)
+
+        # Hard cap: max 15 emails per run.  Space them 45s apart in batches of 5.
+        limit = min(params.get("limit", 15), 15)
+        BATCH_SIZE = 5
+        BATCH_DELAY_SECS = 45  # wait between batches
 
         # Count leads for the immediate response
         lead_count = 0
@@ -1965,6 +1974,8 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
         if lead_count == 0:
             return {"success": True, "sent": 0, "message": "No new leads with emails found."}
 
+        actual = min(lead_count, limit)
+
         def _bulk_send_in_background():
             bg_db = SessionLocal()
             try:
@@ -1977,13 +1988,20 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
                 agent = OutreachAI(bg_db)
                 sent = 0
                 failed = 0
-                for lead in leads:
+                for i, lead in enumerate(leads):
                     try:
                         agent.send_initial_outreach(lead.id)
                         sent += 1
+                        self.logger.info(f"Bulk send [{sent}/{len(leads)}] → {lead.email}")
                     except Exception as e:
                         self.logger.error(f"Failed send to lead {lead.id}: {e}")
                         failed += 1
+
+                    # Pause between batches (not after the last send)
+                    if (i + 1) % BATCH_SIZE == 0 and (i + 1) < len(leads):
+                        self.logger.info(f"Bulk send: batch pause {BATCH_DELAY_SECS}s ...")
+                        _time.sleep(BATCH_DELAY_SECS)
+
                 result = {"sent": sent, "failed": failed, "total": len(leads)}
                 crud.log_agent_action(bg_db, "supervisor", "tool:bulk_send_outreach", params, result, "success")
                 self.logger.info(f"Background bulk send complete: {result}")
@@ -1997,7 +2015,13 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             "success": True,
             "queued": True,
             "total_leads": lead_count,
-            "message": f"Bulk send queued for {min(lead_count, limit)} leads. Sending in background — check agent logs for delivery confirmation.",
+            "batch_size": BATCH_SIZE,
+            "batch_delay_secs": BATCH_DELAY_SECS,
+            "sending": actual,
+            "message": (
+                f"Bulk send queued for {actual} leads (max 15 per run, sent in batches of {BATCH_SIZE} "
+                f"with {BATCH_DELAY_SECS}s pause between batches). Check agent logs for confirmation."
+            ),
         }
 
     def _tool_get_system_state(self, params: Dict[str, Any]) -> Dict[str, Any]:

@@ -779,6 +779,14 @@ _SKIP_EMAIL_PREFIXES = (
     "webmaster", "hostmaster", "postmaster",
 )
 
+# Generic catch-all prefixes — skip entirely, not worth cold emailing
+_GENERIC_PREFIXES = (
+    "info", "contact", "hello", "enquiries", "enquiry",
+    "general", "admin", "office", "mail", "email",
+    "sales", "service", "services", "team", "staff",
+    "reception", "enquire", "inquire", "inquiry",
+)
+
 
 def _is_valid_contact_email(email: str) -> bool:
     email_lower = email.lower()
@@ -788,6 +796,12 @@ def _is_valid_contact_email(email: str) -> bool:
     if any(email_lower.endswith(ext) for ext in (".png", ".jpg", ".gif", ".svg", ".css", ".js")):
         return False
     return True
+
+
+def _is_generic_email(email: str) -> bool:
+    """Return True for generic catch-all addresses not worth cold emailing."""
+    local = email.lower().split("@")[0]
+    return local in _GENERIC_PREFIXES
 
 
 def _scrape_emails_from_url(url: str, timeout: int = 8) -> list[str]:
@@ -814,6 +828,9 @@ def _scrape_business_website(website: str) -> tuple[list[str], str]:
     """
     Try homepage + /contact + /about for emails.
     Returns (emails_found, best_email).
+
+    Only returns a best_email if a real named contact is found.
+    Generic catch-alls like info@ / contact@ are rejected entirely.
     """
     base = website.rstrip("/")
     all_emails: list[str] = []
@@ -825,9 +842,9 @@ def _scrape_business_website(website: str) -> tuple[list[str], str]:
 
     unique = list(dict.fromkeys(all_emails))  # preserve order, dedupe
 
-    # Prefer emails that look like owner/contact (not generic info@)
-    preferred = [e for e in unique if not e.startswith("info@") and not e.startswith("contact@")]
-    best = preferred[0] if preferred else (unique[0] if unique else "")
+    # Only keep personal/named emails — drop all generic catch-alls
+    personal = [e for e in unique if not _is_generic_email(e)]
+    best = personal[0] if personal else ""  # empty = skip this business
     return unique, best
 
 

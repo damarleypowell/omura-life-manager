@@ -132,7 +132,6 @@ def scheduled_inbox_triage():
         inbox = InboxAI(db)
         result = inbox.process_inbox()
 
-        from backend.app.scheduler_jobs import _auto_classify_leads
         _auto_classify_leads(db, result.get("triaged", []))
 
         crud.log_agent_action(db, "scheduler", "inbox_triage", {}, {

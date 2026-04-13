@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { FiMail, FiFlag, FiAlertTriangle, FiSend, FiMessageSquare } from 'react-icons/fi';
-import { dashboard, communications, ai } from '../../services/apiService';
+import { dashboard, communications, email as emailApi, ai } from '../../services/apiService';
 
 function stripHtml(html) {
   if (!html) return '';
@@ -81,14 +81,21 @@ export default function CommunicationCenter() {
   async function handleSend(responseText) {
     setSending(true);
     try {
-      await communications.update(selectedMsg.id, {
-        action: 'send_response',
-        response: responseText,
-        is_read: true,
-      });
+      // Extract reply-to email from sender field ("Name <email@x.com>" or raw email)
+      const senderRaw = selectedMsg.sender || '';
+      const emailMatch = senderRaw.match(/<([^>]+)>/);
+      const toEmail = emailMatch ? emailMatch[1] : senderRaw.trim();
+      const subject = selectedMsg.subject
+        ? (selectedMsg.subject.startsWith('Re:') ? selectedMsg.subject : `Re: ${selectedMsg.subject}`)
+        : 'Re: Your message';
+
+      await emailApi.send(toEmail, subject, responseText);
+      await communications.update(selectedMsg.id, { is_read: true });
       await loadData();
       setSelectedMsg(null);
-    } catch { /* silently handled */ } finally { setSending(false); }
+    } catch (err) {
+      console.error('[CommunicationCenter] send failed:', err);
+    } finally { setSending(false); }
   }
 
   function handleDismiss(msgId) {

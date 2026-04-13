@@ -135,7 +135,7 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="Personal & Business Operating System for Sir",
-    docs_url="/docs" if settings.DEBUG else None,   # hide Swagger in production
+    docs_url="/docs",
     redoc_url=None,
 )
 
@@ -148,8 +148,6 @@ app.add_middleware(
         "http://localhost:3000", "http://localhost:3001", "http://localhost:3002",
         "https://omura-life-manager.vercel.app",
         "https://omura-life-manager-damarleypowells-projects.vercel.app",
-        # Allow all Vercel preview deployments
-        "https://*.vercel.app",
     ],
     allow_origin_regex=r"https://omura-life-manager.*\.vercel\.app",
     allow_credentials=True,

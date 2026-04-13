@@ -46,6 +46,15 @@ def get_google_access_token() -> Optional[str]:
     return token.get("access_token")
 
 
+def _strip_html_clean(html: str) -> str:
+    """Strip HTML tags and style/script content, return plain text."""
+    # Remove style and script blocks entirely (content inside is CSS/JS, not text)
+    html = re.sub(r'<(style|script)[^>]*>.*?</(style|script)>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
+    # Strip remaining tags
+    html = re.sub(r'<[^>]+>', ' ', html)
+    return re.sub(r'\s+', ' ', html).strip()
+
+
 def extract_email_body(payload: dict) -> str:
     """Recursively extract plain text from a Gmail message payload."""
     mime_type = payload.get("mimeType", "")
@@ -56,7 +65,7 @@ def extract_email_body(payload: dict) -> str:
 
     if mime_type == "text/html" and body_data:
         raw = base64.urlsafe_b64decode(body_data + "==").decode("utf-8", errors="replace")
-        return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', raw)).strip()
+        return _strip_html_clean(raw)
 
     parts = payload.get("parts", [])
     plain = ""

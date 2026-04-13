@@ -39,13 +39,20 @@ scheduler = _make_scheduler()
 
 
 def schedule_lead_followup_sequence(lead_id: int):
-    """Queue day-2, day-4, day-7 follow-up emails for a lead.
+    """Queue Touch 2/3/4 follow-up emails for a lead.
+
+    Schedule:
+      Touch 1 = day 0  (sent immediately by send_initial_outreach)
+      Touch 2 = day 3
+      Touch 3 = day 7
+      Touch 4 = day 14
+      Loom    = triggered on reply (not scheduled here)
 
     Jobs are persisted in PostgreSQL — survive Railway restarts.
     """
     from backend.app.scheduler_jobs import send_followup_email
     now = datetime.utcnow()
-    for day in (2, 4, 7):
+    for day in (3, 7, 14):
         run_time = now + timedelta(days=day)
         job_id = f"followup_lead{lead_id}_day{day}"
         scheduler.add_job(

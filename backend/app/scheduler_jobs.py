@@ -23,7 +23,7 @@ def send_followup_email(lead_id: int, day: int):
 
         # Use the exact proven templates stored in the lead notes
         notes = lead.notes or ""
-        touch_map = {2: "TOUCH 2", 4: "TOUCH 3", 7: "TOUCH 4"}
+        touch_map = {3: "TOUCH 2", 7: "TOUCH 3", 14: "TOUCH 4"}
         touch_header = touch_map.get(day, "TOUCH 2")
 
         def _extract_section(text: str, header: str) -> str:
@@ -208,9 +208,9 @@ def _auto_classify_leads(db, triaged_messages: list):
 
 
 def _detect_lead_replies(db, triaged_messages: list):
-    """If a triaged email is from a known lead, mark them as REPLIED and cancel follow-ups."""
+    """If a triaged email is from a known lead, mark QUALIFIED, cancel follow-ups, send Loom."""
     import re as _re
-    from backend.app.database import models
+    from backend.app.database import models, crud
     from backend.app.scheduler import scheduler
 
     for msg in triaged_messages:
@@ -223,25 +223,89 @@ def _detect_lead_replies(db, triaged_messages: list):
         lead = db.query(models.Lead).filter(models.Lead.email == email_addr).first()
         if not lead:
             continue
-        if lead.status in (models.LeadStatus.WON, models.LeadStatus.LOST, models.LeadStatus.REPLIED):
+        # Only trigger once — skip leads already past CONTACTED
+        if lead.status in (models.LeadStatus.QUALIFIED, models.LeadStatus.PROPOSAL,
+                           models.LeadStatus.WON, models.LeadStatus.LOST):
             continue
 
-        # Mark lead as QUALIFIED (replied/responded — move them up the pipeline)
+        # Mark as qualified (replied/interested)
         lead.status = models.LeadStatus.QUALIFIED
         lead.last_contact = datetime.utcnow()
 
-        # Cancel any pending follow-up jobs for this lead
-        for day in (2, 4, 7):
+        # Cancel pending generic follow-ups — they replied, no more cold sequence
+        for day in (3, 7, 14):
             job_id = f"followup_lead{lead.id}_day{day}"
             try:
                 scheduler.remove_job(job_id)
             except Exception:
-                pass  # Job already ran or doesn't exist
+                pass
+
+        # Send personalized Loom email immediately
+        try:
+            _send_loom_email(lead)
+            crud.log_agent_action(db, "automation", "loom_triggered",
+                input_data={"lead_id": lead.id, "email": lead.email},
+                status="success")
+        except Exception as exc:
+            crud.log_agent_action(db, "automation", "loom_triggered",
+                input_data={"lead_id": lead.id},
+                status="error", error_message=str(exc))
 
     try:
         db.commit()
     except Exception:
         db.rollback()
+
+
+def _send_loom_email(lead) -> dict:
+    """Send the personalized Loom video email to a lead who has shown interest (replied)."""
+    from backend.app.email_utils import send_via_sendgrid
+
+    notes = lead.notes or ""
+
+    def _extract_section(text: str, header: str) -> str:
+        start = text.find(f"[{header}]")
+        if start == -1:
+            return ""
+        after = text.find("\n", start) + 1
+        next_bracket = text.find("\n[", after)
+        return (text[after:next_bracket] if next_bracket != -1 else text[after:]).strip()
+
+    loom_block = _extract_section(notes, "LOOM EMAIL")
+
+    # Parse subject and body from the loom block
+    subject = ""
+    body_lines = []
+    in_body = False
+    for line in loom_block.split("\n"):
+        if line.startswith("Subject:") and not subject:
+            subject = line.replace("Subject:", "").strip()
+        elif line.startswith("Body:"):
+            in_body = True
+            rest = line.replace("Body:", "").strip()
+            if rest:
+                body_lines.append(rest)
+        elif in_body:
+            body_lines.append(line)
+
+    body = "\n".join(body_lines).strip()
+
+    if not subject:
+        subject = f"Quick Loom I recorded for {lead.company or lead.name}"
+    if not body:
+        # Fallback generic loom email
+        first = (lead.name or "there").split()[0]
+        company = lead.company or "your business"
+        body = (
+            f"Hey {first},\n\n"
+            f"Thanks for getting back — I put together a short Loom specifically "
+            f"for {company} showing exactly where leads are slipping through.\n\n"
+            f"[LOOM LINK]\n\n"
+            f"Happy to walk through it on a quick 15-min call if it's relevant.\n\n"
+            f"— Damarley"
+        )
+
+    return send_via_sendgrid(to=lead.email, subject=subject, body=body)
 
 
 def scheduled_daily_briefing():

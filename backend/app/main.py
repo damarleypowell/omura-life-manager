@@ -178,6 +178,7 @@ from backend.app.scheduler_jobs import scheduled_inbox_triage as _scheduled_inbo
 from backend.app.scheduler_jobs import scheduled_daily_briefing as _scheduled_daily_briefing
 from backend.app.scheduler_jobs import scheduled_weekly_pipeline as _scheduled_weekly_pipeline
 from backend.app.scheduler_jobs import scheduled_daily_outreach as _scheduled_daily_outreach
+from backend.app.scheduler_jobs import scheduled_sheets_sync as _scheduled_sheets_sync
 from backend.app.email_utils import send_via_sendgrid as _send_via_sendgrid
 from backend.app.google_utils import get_google_access_token as _get_google_access_token, extract_email_body as _extract_email_body
 from apscheduler.triggers.cron import CronTrigger
@@ -187,6 +188,7 @@ _scheduler.add_job(_scheduled_inbox_triage, IntervalTrigger(minutes=30), id="inb
 _scheduler.add_job(_scheduled_daily_briefing, CronTrigger(hour=8, minute=0), id="daily_briefing", replace_existing=True)
 _scheduler.add_job(_scheduled_weekly_pipeline, CronTrigger(day_of_week="mon", hour=9, minute=0), id="weekly_pipeline", replace_existing=True)
 _scheduler.add_job(_scheduled_daily_outreach, CronTrigger(hour=9, minute=0), id="daily_outreach", replace_existing=True)
+_scheduler.add_job(_scheduled_sheets_sync, CronTrigger(hour=7, minute=30), id="sheets_sync", replace_existing=True)
 _scheduler.start()
 
 
@@ -843,6 +845,73 @@ def test_email(db: Session = Depends(get_db)):
 
 
 # ══════════════════════════════════════════════
+# Google Sheets — Lead Pipeline Sync
+# ══════════════════════════════════════════════
+
+class SheetsImportRequest(BaseModel):
+    sheet_url: str
+    sheet_tab: Optional[str] = "Sheet1"
+
+@app.post("/api/sheets/export")
+def sheets_export_pipeline(db: Session = Depends(get_db)):
+    """Export all leads to the Omura Lead Pipeline Google Sheet.
+    Creates the sheet automatically if it doesn't exist yet.
+    Returns the sheet URL.
+    """
+    from backend.app.google_sheets import export_pipeline_to_sheets
+    from backend.app.google_utils import get_google_access_token
+    access_token = get_google_access_token()
+    if not access_token:
+        raise HTTPException(401, "Google not connected. Go to /auth/google first.")
+    try:
+        result = export_pipeline_to_sheets(db, access_token)
+        crud.log_agent_action(db, "system", "sheets_export", {},
+            {"leads": result["leads_exported"], "url": result["sheet_url"]}, "success")
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Sheets export failed: {str(e)}")
+
+
+@app.post("/api/sheets/import")
+def sheets_import_leads(request: SheetsImportRequest, db: Session = Depends(get_db)):
+    """Import leads from a Google Sheet into the outreach pipeline.
+    The sheet must have a header row with at minimum an 'Email' column.
+    Paste the Google Sheets URL. Supports any column order.
+    """
+    from backend.app.google_sheets import import_leads_from_sheet, extract_sheet_id_from_url
+    from backend.app.google_utils import get_google_access_token
+    access_token = get_google_access_token()
+    if not access_token:
+        raise HTTPException(401, "Google not connected. Go to /auth/google first.")
+    sheet_id = extract_sheet_id_from_url(request.sheet_url)
+    if not sheet_id:
+        raise HTTPException(400, "Invalid Google Sheets URL. Copy the full URL from your browser.")
+    try:
+        result = import_leads_from_sheet(db, access_token, sheet_id, request.sheet_tab or "Sheet1")
+        if result.get("imported", 0) > 0:
+            crud.log_agent_action(db, "system", "sheets_import", {"sheet_id": sheet_id},
+                result, "success")
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Sheets import failed: {str(e)}")
+
+
+@app.get("/api/sheets/pipeline-url")
+def sheets_get_pipeline_url(db: Session = Depends(get_db)):
+    """Get (or create) the Omura Lead Pipeline sheet URL without exporting data."""
+    from backend.app.google_sheets import get_or_create_pipeline_sheet, get_sheet_url
+    from backend.app.google_utils import get_google_access_token
+    access_token = get_google_access_token()
+    if not access_token:
+        raise HTTPException(401, "Google not connected. Go to /auth/google first.")
+    try:
+        sheet_id = get_or_create_pipeline_sheet(access_token)
+        return {"sheet_id": sheet_id, "sheet_url": get_sheet_url(sheet_id)}
+    except Exception as e:
+        raise HTTPException(500, f"Could not get sheet: {str(e)}")
+
+
+# ══════════════════════════════════════════════
 # Google OAuth 2.0 — Real Auth Flow
 # ══════════════════════════════════════════════
 
@@ -853,6 +922,8 @@ _GOOGLE_SCOPES = " ".join([
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
 ])
 
 @app.get("/auth/google")

@@ -405,3 +405,29 @@ def scheduled_daily_outreach():
         crud.log_agent_action(db, "scheduler", "daily_outreach", {}, None, "error", str(exc))
     finally:
         db.close()
+
+
+def scheduled_sheets_sync():
+    """Run every day at 7:30am UTC: export full lead pipeline to Google Sheets."""
+    from backend.app.database.session import SessionLocal
+    from backend.app.database import crud
+    from backend.app.google_utils import get_google_access_token
+    from backend.app.google_sheets import export_pipeline_to_sheets
+
+    access_token = get_google_access_token()
+    if not access_token:
+        return  # Google not connected yet — skip silently
+
+    db = SessionLocal()
+    try:
+        result = export_pipeline_to_sheets(db, access_token)
+        crud.log_agent_action(db, "scheduler", "sheets_sync", {},
+            {"leads_exported": result.get("leads_exported", 0),
+             "sheet_url": result.get("sheet_url", "")}, "success")
+    except Exception as exc:
+        try:
+            crud.log_agent_action(db, "scheduler", "sheets_sync", {}, None, "error", str(exc))
+        except Exception:
+            pass
+    finally:
+        db.close()

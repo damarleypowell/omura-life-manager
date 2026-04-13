@@ -7,6 +7,47 @@ import React, { useState, useEffect } from 'react';
 import { FiBook, FiPlus, FiSearch, FiTag, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import { notes as notesApi } from '../../services/apiService';
 
+// Lightweight markdown renderer — no external dependency
+function MarkdownBlock({ text }) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const elements = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^### /.test(line)) {
+      elements.push(<h3 key={i} className="text-base font-bold text-white mt-4 mb-1">{inline(line.slice(4))}</h3>);
+    } else if (/^## /.test(line)) {
+      elements.push(<h2 key={i} className="text-lg font-bold text-white mt-5 mb-2">{inline(line.slice(3))}</h2>);
+    } else if (/^# /.test(line)) {
+      elements.push(<h1 key={i} className="text-xl font-bold text-white mt-5 mb-2">{inline(line.slice(2))}</h1>);
+    } else if (/^---+$/.test(line.trim())) {
+      elements.push(<hr key={i} className="border-white/10 my-3" />);
+    } else if (/^[-*] /.test(line)) {
+      elements.push(<li key={i} className="ml-4 list-disc text-slate-300">{inline(line.slice(2))}</li>);
+    } else if (/^\d+\. /.test(line)) {
+      elements.push(<li key={i} className="ml-4 list-decimal text-slate-300">{inline(line.replace(/^\d+\. /, ''))}</li>);
+    } else if (line.trim() === '') {
+      elements.push(<div key={i} className="h-2" />);
+    } else {
+      elements.push(<p key={i} className="text-slate-300 leading-relaxed">{inline(line)}</p>);
+    }
+    i++;
+  }
+  return <div className="space-y-0.5">{elements}</div>;
+}
+
+function inline(text) {
+  // **bold**, *italic*, `code`
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
+  return parts.map((p, i) => {
+    if (/^\*\*.*\*\*$/.test(p)) return <strong key={i} className="text-white font-semibold">{p.slice(2, -2)}</strong>;
+    if (/^\*.*\*$/.test(p)) return <em key={i} className="italic text-slate-200">{p.slice(1, -1)}</em>;
+    if (/^`.*`$/.test(p)) return <code key={i} className="bg-white/10 px-1 rounded text-xs font-mono text-blue-300">{p.slice(1, -1)}</code>;
+    return p;
+  });
+}
+
 const CATEGORY_COLORS = {
   research: 'badge-info',
   strategy: 'badge-accent',
@@ -270,9 +311,9 @@ export default function KnowledgeHub() {
                 </div>
               </div>
               <div
-                className={`glass-inner rounded-2xl p-6 text-sm leading-relaxed whitespace-pre-wrap text-slate-300 bg-gradient-to-br ${CATEGORY_GLOW[selectedNote.category] || 'from-white/[0.02] to-white/[0.01]'} border border-white/[0.06]`}
+                className={`glass-inner rounded-2xl p-6 text-sm bg-gradient-to-br ${CATEGORY_GLOW[selectedNote.category] || 'from-white/[0.02] to-white/[0.01]'} border border-white/[0.06]`}
               >
-                {selectedNote.content}
+                <MarkdownBlock text={selectedNote.content} />
               </div>
               {selectedNote.tags && selectedNote.tags.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-5">

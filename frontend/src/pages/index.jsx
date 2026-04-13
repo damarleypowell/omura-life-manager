@@ -138,7 +138,7 @@ export default function Dashboard() {
             syncing={syncing}
           />
 
-          <main className="p-8">
+          <main className="p-8 pr-24">
             {ActiveComponent ? (
               <ActiveComponent />
             ) : (

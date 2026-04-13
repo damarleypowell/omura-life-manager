@@ -61,6 +61,7 @@ export default function Dashboard() {
           type: 'info',
           message: `${unread.length} unread message${unread.length > 1 ? 's' : ''} in your inbox`,
           time: 'Just now',
+          link: 'communication',
         });
       }
     } catch { /* non-critical */ }
@@ -72,6 +73,7 @@ export default function Dashboard() {
           type: 'warning',
           message: `${overdue.length} overdue task${overdue.length > 1 ? 's' : ''} need attention`,
           time: 'Just now',
+          link: 'business',
         });
       }
     } catch { /* non-critical */ }
@@ -83,6 +85,7 @@ export default function Dashboard() {
           type: 'error',
           message: `${urgent.length} urgent message${urgent.length > 1 ? 's' : ''} require action`,
           time: 'Just now',
+          link: 'communication',
         });
       }
     } catch { /* non-critical */ }
@@ -134,6 +137,7 @@ export default function Dashboard() {
             notifications={notifications}
             onDismissNotification={dismissNotification}
             onDismissAllNotifications={dismissAllNotifications}
+            onNavigate={setActiveSection}
             onSync={handleSync}
             syncing={syncing}
           />

@@ -6,7 +6,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FiSearch, FiBell, FiUser, FiRefreshCw } from 'react-icons/fi';
 import NotificationPanel from './Notifications';
 
-export default function Header({ title, notifications = [], onDismissNotification, onDismissAllNotifications, onSync, syncing }) {
+export default function Header({ title, notifications = [], onDismissNotification, onDismissAllNotifications, onNavigate, onSync, syncing }) {
   const [searchQuery, setSearchQuery]     = useState('');
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifRef = useRef(null);
@@ -97,6 +97,7 @@ export default function Header({ title, notifications = [], onDismissNotificatio
                   notifications={notifications}
                   onDismiss={(idx) => { onDismissNotification?.(idx); }}
                   onDismissAll={() => { onDismissAllNotifications?.(); setShowNotifPanel(false); }}
+                  onNavigate={(section) => { onNavigate?.(section); setShowNotifPanel(false); }}
                 />
               </div>
             )}

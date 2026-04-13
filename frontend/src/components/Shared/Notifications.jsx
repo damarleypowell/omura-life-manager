@@ -62,7 +62,7 @@ const PANEL_CLS = `min-w-[300px] max-w-[380px] rounded-3xl border border-white/[
   bg-[#0c0d12]/95 backdrop-blur-3xl
   shadow-[0_24px_64px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.04)]`;
 
-export default function NotificationPanel({ notifications = [], onDismiss, onDismissAll }) {
+export default function NotificationPanel({ notifications = [], onDismiss, onDismissAll, onNavigate }) {
   if (notifications.length === 0) {
     return (
       <div className={`${PANEL_CLS} p-6 text-center`}>
@@ -93,7 +93,12 @@ export default function NotificationPanel({ notifications = [], onDismiss, onDis
       </div>
       <div className="max-h-96 overflow-y-auto divide-y divide-white/[0.04]">
         {notifications.map((notif, idx) => (
-          <div key={idx} className="flex items-start gap-3 px-4 py-3 hover:bg-white/[0.03] transition-colors">
+          <div
+            key={idx}
+            onClick={() => notif.link && onNavigate?.(notif.link)}
+            className={`flex items-start gap-3 px-4 py-3 transition-colors
+              ${notif.link ? 'cursor-pointer hover:bg-white/[0.06]' : 'hover:bg-white/[0.03]'}`}
+          >
             <div className={`mt-0.5 flex-shrink-0 ${
               notif.type === 'success' ? 'text-emerald-400' :
               notif.type === 'warning' ? 'text-amber-400' :
@@ -107,9 +112,10 @@ export default function NotificationPanel({ notifications = [], onDismiss, onDis
             <div className="flex-1 min-w-0">
               <p className="text-sm text-white/80">{notif.message}</p>
               {notif.time && <p className="text-xs text-slate-600 mt-0.5">{notif.time}</p>}
+              {notif.link && <p className="text-[10px] text-blue-500/70 mt-0.5">Tap to open →</p>}
             </div>
             <button
-              onClick={() => onDismiss(idx)}
+              onClick={(e) => { e.stopPropagation(); onDismiss(idx); }}
               className="text-slate-600 hover:text-slate-400 transition-colors flex-shrink-0"
             >
               <FiX size={13} />

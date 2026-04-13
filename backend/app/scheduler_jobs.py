@@ -308,6 +308,84 @@ def _send_loom_email(lead) -> dict:
     return send_via_sendgrid(to=lead.email, subject=subject, body=body)
 
 
+def scheduled_daily_inbox_categorize():
+    """Run once daily at 6am: categorize ALL uncategorized inbox messages.
+
+    Assigns each communication an ai_category in extra_data:
+      spam        — newsletters, no-reply, marketing blasts
+      important   — direct message that needs a response
+      outreach_reply — someone replied to IronLogic cold outreach
+      newsletter  — subscription updates / digests
+      follow_up   — needs a reply or follow-up action
+      general     — everything else
+    """
+    from backend.app.database.session import SessionLocal
+    from backend.app.database import models, crud
+    from backend.app.ai_agents._claude_caller import call_claude_json
+    import re as _re
+
+    SPAM_SIGNALS = (
+        "unsubscribe", "newsletter", "no-reply", "noreply",
+        "notifications@", "mailer-daemon", "donotreply",
+        "marketing", "promotions", "offer", "deal", "sale",
+    )
+    OUTREACH_SIGNALS = (
+        "ironlogic", "ai automation", "damarley",
+        "quick question", "quick idea", "loom",
+    )
+
+    db = SessionLocal()
+    try:
+        # Only process emails not yet categorized
+        messages = (
+            db.query(models.Communication)
+            .filter(models.Communication.platform == "gmail")
+            .order_by(models.Communication.received_at.desc())
+            .limit(200)
+            .all()
+        )
+
+        categorized = 0
+        for msg in messages:
+            extra = msg.extra_data or {}
+            if extra.get("ai_category"):
+                continue  # already done
+
+            sender = (msg.sender or "").lower()
+            subject = (msg.subject or "").lower()
+            body_snippet = (msg.body or "")[:300].lower()
+
+            # Rule-based fast path — no Claude needed
+            if any(s in sender or s in subject or s in body_snippet for s in SPAM_SIGNALS):
+                category = "spam"
+            elif any(s in sender or s in subject or s in body_snippet for s in OUTREACH_SIGNALS):
+                category = "outreach_reply"
+            else:
+                # Ask Claude to classify
+                result = call_claude_json(
+                    f"Classify this email into ONE category.\n"
+                    f"From: {msg.sender}\nSubject: {msg.subject}\nSnippet: {(msg.body or '')[:300]}\n\n"
+                    f'Categories: spam, important, newsletter, outreach_reply, follow_up, general\n'
+                    f'Respond with {{"category": "..."}}',
+                    "You are an email classifier. Return only valid JSON.",
+                    agent_name="inbox_ai",
+                )
+                category = (result or {}).get("category", "general")
+                if category not in ("spam", "important", "newsletter", "outreach_reply", "follow_up", "general"):
+                    category = "general"
+
+            msg.extra_data = {**extra, "ai_category": category}
+            categorized += 1
+
+        db.commit()
+        crud.log_agent_action(db, "scheduler", "inbox_categorize", {}, {"categorized": categorized}, "success")
+
+    except Exception as exc:
+        crud.log_agent_action(db, "scheduler", "inbox_categorize", {}, None, "error", str(exc))
+    finally:
+        db.close()
+
+
 def scheduled_daily_briefing():
     from backend.app.database.session import SessionLocal
     from backend.app.database import models, crud

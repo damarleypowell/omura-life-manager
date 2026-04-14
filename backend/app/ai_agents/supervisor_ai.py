@@ -587,7 +587,7 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
             "properties": {
                 "limit": {
                     "type": "integer",
-                    "description": "Max emails to send in this run. Hard-capped at 15 to avoid spam filters. Default 15.",
+                    "description": "Max emails to send in this run. Automatically capped by the warmup schedule (30/50/70/100 per day depending on week). Omit to use today's warmup limit.",
                 },
             },
             "required": [],
@@ -1955,10 +1955,15 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
         from backend.app.ai_agents.outreach_ai import OutreachAI
         from backend.app.database.session import SessionLocal
 
-        # Hard cap: max 15 emails per run.  Space them 45s apart in batches of 5.
-        limit = min(params.get("limit", 15), 15)
-        BATCH_SIZE = 5
-        BATCH_DELAY_SECS = 45  # wait between batches
+        # Respect warmup schedule — get today's limit from the DB
+        from backend.app.scheduler_jobs import _get_daily_send_limit
+        try:
+            warmup_limit = _get_daily_send_limit(self.db)
+        except Exception:
+            warmup_limit = 30
+        limit = min(params.get("limit", warmup_limit), warmup_limit)
+        BATCH_SIZE = 10
+        BATCH_DELAY_SECS = 30  # wait between batches
 
         # Count leads for the immediate response
         lead_count = 0

@@ -431,54 +431,148 @@ def scheduled_weekly_pipeline():
         db.close()
 
 
+def _get_daily_send_limit(db) -> int:
+    """
+    Warmup schedule — ramps over 3 weeks to protect Gmail sender reputation.
+
+    Week 1 (days 1-7):   30/day
+    Week 2 (days 8-14):  50/day
+    Week 3 (days 15-21): 70/day
+    Week 4+ (day 22+):  100/day
+
+    Warmup start date stored in credentials table as 'outreach_warmup_start'.
+    Auto-set to today on first run.
+    """
+    from backend.app.database import models
+    from datetime import date as _date
+
+    TODAY = _date.today().isoformat()
+
+    # Read or initialise warmup start
+    cred = db.query(models.Credential).filter(
+        models.Credential.name == "outreach_warmup_start"
+    ).first()
+
+    if not cred:
+        # First ever run — record today as day 1
+        cred = models.Credential(
+            name="outreach_warmup_start",
+            service="outreach",
+            credential_type="config",
+            encrypted_value=TODAY.encode(),
+        )
+        db.add(cred)
+        db.commit()
+        return 30
+
+    try:
+        start = _date.fromisoformat(cred.encrypted_value.decode())
+    except Exception:
+        return 30
+
+    days_elapsed = (_date.today() - start).days + 1  # day 1 = first day
+
+    if days_elapsed <= 7:
+        return 30
+    elif days_elapsed <= 14:
+        return 50
+    elif days_elapsed <= 21:
+        return 70
+    else:
+        return 100
+
+
 def scheduled_daily_outreach():
-    """Run every day at 9am UTC: scrape new leads, draft copy, send Touch 1, queue sequences."""
+    """
+    Run every day at 9am UTC: scrape new leads, draft copy, send Touch 1, queue sequences.
+
+    Daily volume follows a 3-week warmup ramp:
+      Week 1: 30/day  |  Week 2: 50/day  |  Week 3: 70/day  |  Week 4+: 100/day
+
+    Sends are spaced 20 seconds apart to avoid triggering Gmail rate limits.
+    Verticals share the daily budget proportionally.
+    """
+    import time as _time
     from backend.app.database.session import SessionLocal
     from backend.app.database import crud
+    from backend.app.database.models import Lead, LeadStatus
     from backend.app.ai_agents.outreach_ai import OutreachAI
 
+    # Vertical mix — proportional slices of the daily budget
+    # Weights must sum to 1.0
     VERTICALS = [
-        {"titles": ["Practice Owner", "Dentist", "Dental Director"], "industries": ["dental"], "locations": ["New York", "Los Angeles", "Miami", "Dallas", "Houston", "Chicago"], "daily_limit": 15},
-        {"titles": ["Owner", "Principal", "Broker"], "industries": ["real estate"], "locations": ["New York", "Los Angeles", "Miami", "Dallas", "Houston"], "daily_limit": 10},
-        {"titles": ["Owner", "Managing Partner", "Attorney"], "industries": ["law"], "locations": ["New York", "Los Angeles", "Miami", "Dallas"], "daily_limit": 10},
-        {"titles": ["Owner", "CEO", "Founder"], "industries": ["solar"], "locations": ["Los Angeles", "Miami", "Dallas", "Phoenix"], "daily_limit": 10},
-        {"titles": ["Owner", "Operations Manager"], "industries": ["hvac", "roofing", "plumbing"], "locations": ["Dallas", "Houston", "Chicago", "Atlanta"], "daily_limit": 10},
+        {"titles": ["Practice Owner", "Dentist", "Dental Director"],
+         "industries": ["dental"],
+         "locations": ["New York", "Los Angeles", "Miami", "Dallas", "Houston", "Chicago"],
+         "weight": 0.25},
+        {"titles": ["Owner", "Principal", "Broker"],
+         "industries": ["real estate"],
+         "locations": ["New York", "Los Angeles", "Miami", "Dallas", "Houston"],
+         "weight": 0.20},
+        {"titles": ["Owner", "Managing Partner", "Attorney"],
+         "industries": ["law"],
+         "locations": ["New York", "Los Angeles", "Miami", "Dallas"],
+         "weight": 0.20},
+        {"titles": ["Owner", "CEO", "Founder"],
+         "industries": ["solar"],
+         "locations": ["Los Angeles", "Miami", "Dallas", "Phoenix"],
+         "weight": 0.15},
+        {"titles": ["Owner", "Operations Manager"],
+         "industries": ["hvac", "roofing", "plumbing"],
+         "locations": ["Dallas", "Houston", "Chicago", "Atlanta"],
+         "weight": 0.20},
     ]
+
+    SEND_DELAY_SECS = 20  # pause between individual sends
 
     db = SessionLocal()
     total_queued = 0
     total_sent = 0
+    total_failed = 0
+
     try:
+        daily_limit = _get_daily_send_limit(db)
+
         agent = OutreachAI(db)
         for v in VERTICALS:
+            v_limit = max(1, round(daily_limit * v["weight"]))
             result = agent.run_pipeline(
                 titles=v["titles"],
                 locations=v["locations"],
                 industries=v["industries"],
-                daily_limit=v["daily_limit"],
+                daily_limit=v_limit,
             )
-            queued = result.get("queued", 0)
-            total_queued += queued
+            total_queued += result.get("queued", 0)
 
-            # Send Touch 1 to all newly queued leads
-            from backend.app.database.models import Lead, LeadStatus
-            new_leads = (
-                db.query(Lead)
-                .filter(Lead.status == LeadStatus.NEW, Lead.email.isnot(None))
-                .order_by(Lead.created_at.desc())
-                .limit(queued or 5)
-                .all()
-            )
-            for lead in new_leads:
-                try:
-                    agent.send_initial_outreach(lead.id)
-                    total_sent += 1
-                except Exception:
-                    pass
+        # Send Touch 1 to all NEW leads with drafted copy, spaced out
+        new_leads = (
+            db.query(Lead)
+            .filter(Lead.status == LeadStatus.NEW, Lead.email.isnot(None))
+            .order_by(Lead.created_at.desc())
+            .limit(daily_limit)
+            .all()
+        )
 
-        crud.log_agent_action(db, "scheduler", "daily_outreach", {}, {
-            "total_queued": total_queued, "total_sent": total_sent,
+        for i, lead in enumerate(new_leads):
+            try:
+                agent.send_initial_outreach(lead.id)
+                total_sent += 1
+            except Exception as exc:
+                total_failed += 1
+                from backend.app.utils.logging import OmuraLogger
+                OmuraLogger("scheduler").error(f"daily_outreach send failed lead {lead.id}: {exc}")
+
+            # Space sends out — pause between each one
+            if i < len(new_leads) - 1:
+                _time.sleep(SEND_DELAY_SECS)
+
+        crud.log_agent_action(db, "scheduler", "daily_outreach", {"daily_limit": daily_limit}, {
+            "total_queued": total_queued,
+            "total_sent": total_sent,
+            "total_failed": total_failed,
+            "daily_limit": daily_limit,
         }, "success")
+
     except Exception as exc:
         crud.log_agent_action(db, "scheduler", "daily_outreach", {}, None, "error", str(exc))
     finally:

@@ -256,57 +256,56 @@ VERTICAL_TEMPLATES = {
         ],
         "touch1": (
             "Hey Dr. {name},\n\n"
-            "Noticed {clinic} is offering implants — most clinics lose a significant number of "
-            "consult requests because follow-up is too slow or missed entirely.\n\n"
-            "I have a quick idea that could help automate that. Worth a 2-minute look?\n\n"
-            "— Damarley"
+            "Noticed {clinic} does implants. Most clinics lose a good chunk of consult "
+            "requests just because follow-up is too slow or gets missed entirely.\n\n"
+            "Got a quick idea that could automate that. Worth a 2-minute look?\n\n"
+            "Damarley"
         ),
         "touch2": (
             "Hey Dr. {name},\n\n"
-            "Industry stat that surprised me: the average implant clinic loses 30-40% of "
-            "inbound consult requests to follow-up delays — most within the first 2 hours.\n\n"
-            "I've been working on an AI intake system that closes that gap automatically. "
-            "Has this been an issue at {clinic}?\n\n"
-            "— Damarley"
+            "Stat that surprised me: the average implant clinic loses 30-40% of consult "
+            "requests to follow-up delays, most within the first 2 hours.\n\n"
+            "Built an AI intake system that closes that gap automatically. Has this been "
+            "an issue at {clinic}?\n\n"
+            "Damarley"
         ),
         "touch3": (
             "Hey Dr. {name},\n\n"
-            "Still want to share something quick about {clinic} — but I also don't want to "
-            "keep bothering you if timing is off.\n\n"
-            "Is capturing more implant consults something you're actively working on, "
+            "Still want to share something quick about {clinic} but don't want to keep "
+            "bothering you if the timing is off.\n\n"
+            "Is capturing more implant consults something you're working on right now, "
             "or should I circle back in a few months?\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "touch4": (
             "Hey Dr. {name},\n\n"
-            "Last one from me — I'll take your silence as 'not right now' and close this out.\n\n"
-            "If improving implant consult bookings ever becomes a priority, feel free to reach "
-            "back out. I'll be here.\n\n"
-            "— Damarley"
+            "Last one from me. Taking your silence as not right now and closing this out.\n\n"
+            "If implant consult bookings ever become a priority, feel free to reach back.\n\n"
+            "Damarley"
         ),
         "loom_email_subject": "Quick Loom I recorded for {clinic}",
         "loom_email": (
             "Hey Dr. {name},\n\n"
-            "Thanks for getting back to me — I put together a short Loom specifically "
-            "looking at {clinic} and where implant consult bookings are likely slipping through.\n\n"
+            "Thanks for getting back. Put together a short Loom specifically on {clinic} "
+            "and where implant consult bookings are likely slipping through.\n\n"
             "[LOOM LINK]\n\n"
             "In the video I cover:\n"
-            "- exactly where most implant inquiries get lost (and when)\n"
-            "- how the AI intake system qualifies leads and books them directly into your calendar\n"
-            "- what a 14-day pilot would look like tied to actual booked consults\n\n"
-            "If it makes sense after watching, I can set up a quick 15-min call to walk you "
+            "Where most implant inquiries get lost and when\n"
+            "How the AI intake system qualifies leads and books them directly into your calendar\n"
+            "What a 14-day pilot would look like tied to actual booked consults\n\n"
+            "If it makes sense after watching, happy to set up a quick 15-min call to walk "
             "through how it fits {clinic} specifically.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "dm": (
-            "Hey Dr. {name} — most implant clinics lose consult bookings to slow follow-up. "
-            "I built a system that fixes it automatically. Worth a look?"
+            "Hey Dr. {name}, most implant clinics lose consult bookings to slow follow-up. "
+            "Built a system that fixes it automatically. Worth a look?"
         ),
         "linkedin": "Hi Dr. {name}, I help implant clinics recover missed consult bookings with AI follow-up. Would love to show you a quick example.",
         "loom_script": (
-            "0-15s: Hey Dr. {name}, I looked at {clinic}'s implant page — I want to show you exactly where you're losing consult bookings.\n"
-            "15-45s: Most clinics like yours lose 30-40% of implant inquiries to delayed follow-up — missed calls, 24hr email response, no instant booking system.\n"
-            "45-75s: I built an AI intake system that qualifies implant leads and books directly into your calendar automatically — under 60 seconds.\n"
+            "0-15s: Hey Dr. {name}, looked at {clinic}'s implant page. Want to show you exactly where you're losing consult bookings.\n"
+            "15-45s: Most clinics like yours lose 30-40% of implant inquiries to delayed follow-up. Missed calls, 24hr email response, no instant booking.\n"
+            "45-75s: Built an AI intake system that qualifies implant leads and books directly into your calendar in under 60 seconds.\n"
             "75-90s: 14-day pilot tied to booked consults. Works, we continue. Doesn't, we stop. No risk."
         ),
     },
@@ -319,56 +318,56 @@ VERTICAL_TEMPLATES = {
         ],
         "touch1": (
             "Hey {name},\n\n"
-            "Noticed {clinic} is in solar — most installers I've spoken to lose qualified "
-            "leads because follow-up takes too long after the initial inquiry.\n\n"
-            "I have a quick idea that could plug that gap automatically. Worth a 2-minute look?\n\n"
-            "— Damarley"
+            "Most solar installers lose qualified leads simply because follow-up takes "
+            "too long after the initial inquiry.\n\n"
+            "Got a quick idea that plugs that gap automatically. Worth a 2-minute look?\n\n"
+            "Damarley"
         ),
         "touch2": (
             "Hey {name},\n\n"
-            "One stat that stood out to me: solar leads that aren't followed up within "
-            "5 minutes convert at 10x lower rates than instant responses.\n\n"
-            "Most installers are still relying on callbacks. I've built an AI system that "
-            "handles qualification and booking instantly. Relevant for {clinic}?\n\n"
-            "— Damarley"
+            "Solar leads not followed up within 5 minutes convert at 10x lower rates "
+            "than instant responses. Most installers are still relying on callbacks.\n\n"
+            "Built an AI system that handles qualification and booking the moment a lead "
+            "comes in. Relevant for {clinic}?\n\n"
+            "Damarley"
         ),
         "touch3": (
             "Hey {name},\n\n"
-            "Not trying to be a bother — I still think there's something here for {clinic}, "
-            "but I also respect your time.\n\n"
-            "Converting more solar inquiries into booked consultations — is that actively "
-            "on your radar or should I follow up later in the year?\n\n"
-            "— Damarley"
+            "Not trying to be a bother. Still think there's something here for {clinic} "
+            "but I respect your time.\n\n"
+            "Converting more solar inquiries into booked consultations, is that on your "
+            "radar right now or should I follow up later in the year?\n\n"
+            "Damarley"
         ),
         "touch4": (
             "Hey {name},\n\n"
-            "Last one from me — closing this out unless I hear back.\n\n"
+            "Last one from me. Closing this out unless I hear back.\n\n"
             "If lead conversion ever becomes a priority for {clinic}, I'm one message away.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "loom_email_subject": "Quick Loom I recorded for {clinic}",
         "loom_email": (
             "Hey {name},\n\n"
-            "Appreciate you getting back — I recorded a short Loom specifically for {clinic} "
+            "Appreciate you getting back. Recorded a short Loom specifically for {clinic} "
             "showing where solar leads are most likely slipping through.\n\n"
             "[LOOM LINK]\n\n"
-            "I cover:\n"
-            "- where solar inquiries go cold (and the data behind it)\n"
-            "- how AI instantly qualifies leads (homeowner? bill size? roof condition?) "
+            "In the video I cover:\n"
+            "Where solar inquiries go cold and the data behind it\n"
+            "How AI instantly qualifies leads (homeowner, bill size, roof condition) "
             "and books site visits directly into your calendar\n"
-            "- what a no-risk 14-day pilot looks like tied to booked consultations\n\n"
-            "If it clicks, happy to jump on a quick 15-min call for {clinic} specifically.\n\n"
-            "— Damarley"
+            "What a no-risk 14-day pilot looks like tied to booked consultations\n\n"
+            "Happy to jump on a quick 15-min call for {clinic} specifically if it clicks.\n\n"
+            "Damarley"
         ),
         "dm": (
-            "Hey {name} — solar installers lose leads to slow follow-up. "
-            "I built AI that qualifies and books them automatically. Worth a look?"
+            "Hey {name}, solar installers lose leads to slow follow-up. "
+            "Built AI that qualifies and books them automatically. Worth a look?"
         ),
         "linkedin": "Hi {name}, I help solar companies stop losing qualified leads to slow follow-up. Built an AI system that books consultations automatically. Would love to connect.",
         "loom_script": (
-            "0-15s: Hey {name}, pulled up {clinic} — want to show you where you're likely losing solar leads.\n"
-            "15-45s: Solar leads that wait 5+ minutes for follow-up convert at a fraction of instant responses. Most installers lose them to competitors who respond faster.\n"
-            "45-75s: AI qualifies leads instantly — homeowner? bill size? roof condition? — and books site visits directly into your calendar. No manual calls needed.\n"
+            "0-15s: Hey {name}, pulled up {clinic}. Want to show you where you're likely losing solar leads.\n"
+            "15-45s: Solar leads that wait 5 minutes for follow-up convert at a fraction of instant responses. Most installers lose them to competitors who move faster.\n"
+            "45-75s: AI qualifies leads instantly, homeowner, bill size, roof condition, and books site visits directly into your calendar. No manual calls needed.\n"
             "75-90s: 14-day pilot tied to booked consultations. Works, we continue. Doesn't, we stop."
         ),
     },
@@ -381,56 +380,56 @@ VERTICAL_TEMPLATES = {
         ],
         "touch1": (
             "Hey {name},\n\n"
-            "You're probably losing deals after hours — buyers reach out at 9pm, nobody "
-            "responds until morning, and by then they've already talked to 3 other agents.\n\n"
-            "I have a quick idea that handles follow-up automatically. Worth a 2-minute look?\n\n"
-            "— Damarley"
+            "Buyers reach out at 9pm, nobody responds until morning, and by then they've "
+            "already talked to 3 other agents. Probably happening at {clinic} too.\n\n"
+            "Got a quick idea that handles follow-up automatically. Worth a 2-minute look?\n\n"
+            "Damarley"
         ),
         "touch2": (
             "Hey {name},\n\n"
             "Real stat: 50% of buyers work with the first agent who responds. "
             "After 5 minutes, response rates drop by 80%.\n\n"
-            "Most agents are still relying on email and callbacks. I built an AI system "
-            "that responds instantly and books showings automatically. Is this relevant for {clinic}?\n\n"
-            "— Damarley"
+            "Built an AI system that responds instantly and books showings automatically. "
+            "Is this relevant for {clinic}?\n\n"
+            "Damarley"
         ),
         "touch3": (
             "Hey {name},\n\n"
-            "Don't want to keep pinging you — still think there's something valuable here "
-            "for {clinic}, but timing might not be right.\n\n"
-            "Converting after-hours inquiries into booked showings — is that something "
+            "Don't want to keep pinging you. Still think there's something valuable here "
+            "for {clinic} but timing might not be right.\n\n"
+            "Converting after-hours inquiries into booked showings, is that something "
             "you're actively working on?\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "touch4": (
             "Hey {name},\n\n"
-            "Last message from me — closing this out.\n\n"
+            "Last message from me. Closing this out.\n\n"
             "If after-hours lead follow-up ever becomes a priority, I'm easy to reach.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "loom_email_subject": "Quick Loom I recorded for {clinic}",
         "loom_email": (
             "Hey {name},\n\n"
-            "Thanks for the reply — I put together a short Loom specifically for {clinic} "
+            "Thanks for the reply. Put together a short Loom specifically for {clinic} "
             "walking through exactly where after-hours leads are going cold.\n\n"
             "[LOOM LINK]\n\n"
-            "I cover:\n"
-            "- the data on why buyers choose the first agent who responds\n"
-            "- how AI responds to inquiries in under 60 seconds, qualifies the buyer, "
+            "In the video I cover:\n"
+            "Why buyers choose the first agent who responds and what that means for {clinic}\n"
+            "How AI responds to inquiries in under 60 seconds, qualifies the buyer, "
             "and books showings directly into your calendar\n"
-            "- what a 14-day pilot looks like for your business\n\n"
+            "What a 14-day pilot looks like for your business\n\n"
             "Happy to jump on a quick 15-min call to walk through it for {clinic} specifically.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "dm": (
-            "Hey {name} — most agents lose deals because follow-up is too slow. "
-            "I built a system that responds and books showings automatically. Worth a look?"
+            "Hey {name}, most agents lose deals because follow-up is too slow. "
+            "Built a system that responds and books showings automatically. Worth a look?"
         ),
         "linkedin": "Hi {name}, I help real estate agents stop losing after-hours leads with AI follow-up that books showings automatically. Would love to connect.",
         "loom_script": (
             "0-15s: Hey {name}, want to show you exactly where {clinic} is losing after-hours deals.\n"
-            "15-45s: 50% of buyers work with the first agent who responds. At 5+ minutes, you've already lost most of them. This is happening at 9pm when nobody's at their desk.\n"
-            "45-75s: AI responds in under 60 seconds, qualifies the buyer (budget? timeline? pre-approved?), and books the showing directly into your calendar.\n"
+            "15-45s: 50% of buyers work with the first agent who responds. At 5 minutes you've already lost most of them. This is happening at 9pm when nobody's at their desk.\n"
+            "45-75s: AI responds in under 60 seconds, qualifies the buyer (budget, timeline, pre-approved), and books the showing directly into your calendar.\n"
             "75-90s: 14-day pilot tied to booked showings. Works, we continue. Doesn't, we stop."
         ),
     },
@@ -443,53 +442,53 @@ VERTICAL_TEMPLATES = {
         ],
         "touch1": (
             "Hey {name},\n\n"
-            "The job goes to whoever responds first — and most HVAC companies are still "
+            "The job goes to whoever responds first. Most HVAC companies are still "
             "losing calls to voicemail and slow callback queues.\n\n"
-            "I have a quick idea that handles every service request instantly. Worth a 2-minute look?\n\n"
-            "— Damarley"
+            "Got a quick idea that handles every service request instantly. Worth a 2-minute look?\n\n"
+            "Damarley"
         ),
         "touch2": (
             "Hey {name},\n\n"
-            "Quick stat: HVAC customers call an average of 3 companies and go with the "
-            "first one that responds. Voicemail is almost always a lost job.\n\n"
-            "I've built an AI system that answers every request instantly and books it "
-            "into your dispatch calendar. Is this relevant for {clinic}?\n\n"
-            "— Damarley"
+            "HVAC customers call an average of 3 companies and go with the first one "
+            "that responds. Voicemail is almost always a lost job.\n\n"
+            "Built an AI system that answers every request instantly and books it into "
+            "your dispatch calendar. Relevant for {clinic}?\n\n"
+            "Damarley"
         ),
         "touch3": (
             "Hey {name},\n\n"
-            "Won't keep bothering you — still think there's a real opportunity here "
-            "for {clinic}, but only if timing is right.\n\n"
-            "Winning more service jobs against faster competitors — is that on your "
+            "Won't keep bothering you. Still think there's a real opportunity here "
+            "for {clinic} but only if the timing is right.\n\n"
+            "Winning more service jobs against faster competitors, is that on your "
             "radar right now?\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "touch4": (
             "Hey {name},\n\n"
-            "Closing this out — last one from me.\n\n"
+            "Closing this out. Last one from me.\n\n"
             "If capturing more jobs ever becomes a priority for {clinic}, I'm easy to reach.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "loom_email_subject": "Quick Loom I recorded for {clinic}",
         "loom_email": (
             "Hey {name},\n\n"
-            "Thanks for getting back — recorded a short Loom specifically looking at "
-            "{clinic} and how service requests are being handled.\n\n"
+            "Thanks for getting back. Recorded a short Loom looking at {clinic} and "
+            "how service requests are being handled.\n\n"
             "[LOOM LINK]\n\n"
-            "I cover:\n"
-            "- how HVAC customers decide (it's almost always speed)\n"
-            "- how AI answers every request instantly, qualifies the job, and books it "
+            "In the video I cover:\n"
+            "How HVAC customers decide (almost always comes down to speed)\n"
+            "How AI answers every request instantly, qualifies the job, and books it "
             "into your dispatch calendar before competitors even call back\n"
-            "- what a no-risk 14-day pilot tied to booked jobs looks like\n\n"
+            "What a no-risk 14-day pilot tied to booked jobs looks like\n\n"
             "Happy to walk through it for {clinic} specifically on a quick 15-min call.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
-        "dm": "Hey {name} — HVAC jobs go to whoever responds first. I built an AI that responds instantly and books the job before your competitors call back. Worth a look?",
+        "dm": "Hey {name}, HVAC jobs go to whoever responds first. Built an AI that responds instantly and books the job before your competitors call back. Worth a look?",
         "linkedin": "Hi {name}, I help HVAC companies win more jobs by responding to service requests instantly with AI. Would love to connect.",
         "loom_script": (
             "0-15s: Hey {name}, want to show you exactly how jobs are going to your competitors at {clinic}.\n"
-            "15-45s: Customer calls 3 companies — first one to respond gets the job. Voicemail means the job already went to someone else. This is happening every day.\n"
-            "45-75s: AI answers instantly, qualifies the job (type of service? urgency? location?), books it into your dispatch calendar automatically.\n"
+            "15-45s: Customer calls 3 companies. First one to respond gets the job. Voicemail means the job already went to someone else. This is happening every day.\n"
+            "45-75s: AI answers instantly, qualifies the job (type of service, urgency, location), books it into your dispatch calendar automatically.\n"
             "75-90s: 14-day pilot tied to booked jobs. Works, we continue. Doesn't, we stop. Zero risk."
         ),
     },
@@ -502,52 +501,53 @@ VERTICAL_TEMPLATES = {
         ],
         "touch1": (
             "Hey {name},\n\n"
-            "How many potential clients slipped through this month because follow-up was too slow?\n\n"
-            "I have a quick idea that handles intake automatically and books consultations "
+            "How many potential clients slipped through this month because follow-up "
+            "was too slow?\n\n"
+            "Got a quick idea that handles intake automatically and books consultations "
             "directly into your calendar. Worth a 2-minute look?\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "touch2": (
             "Hey {name},\n\n"
-            "Data point: potential clients who contact multiple firms almost always go "
-            "with the first one that qualifies their case and responds quickly.\n\n"
-            "I've built an AI intake system that does exactly that, automatically. "
-            "Is this relevant for {clinic}?\n\n"
-            "— Damarley"
+            "Potential clients who contact multiple firms almost always go with the first "
+            "one that qualifies their case and responds quickly.\n\n"
+            "Built an AI intake system that does exactly that, automatically. "
+            "Relevant for {clinic}?\n\n"
+            "Damarley"
         ),
         "touch3": (
             "Hey {name},\n\n"
-            "Still think there's something valuable here for {clinic} — but I don't "
-            "want to keep messaging if timing is off.\n\n"
-            "Capturing more qualified consultations — is that something you're "
-            "actively focused on right now?\n\n"
-            "— Damarley"
+            "Still think there's something valuable here for {clinic} but don't want "
+            "to keep messaging if the timing is off.\n\n"
+            "Capturing more qualified consultations, is that something you're actively "
+            "focused on right now?\n\n"
+            "Damarley"
         ),
         "touch4": (
             "Hey {name},\n\n"
-            "Last one from me — closing this out.\n\n"
+            "Last one from me. Closing this out.\n\n"
             "If improving consultation intake ever becomes a priority, feel free to reach back.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "loom_email_subject": "Quick Loom I recorded for {clinic}",
         "loom_email": (
             "Hey {name},\n\n"
-            "Appreciate the reply — I put together a short Loom specifically for {clinic} "
+            "Appreciate the reply. Put together a short Loom specifically for {clinic} "
             "walking through how qualified consultation requests are being lost to slow intake.\n\n"
             "[LOOM LINK]\n\n"
-            "I cover:\n"
-            "- why potential clients choose the first firm that responds and qualifies their case\n"
-            "- how AI intake handles this instantly — qualifies the case type, books the "
+            "In the video I cover:\n"
+            "Why potential clients choose the first firm that responds and qualifies their case\n"
+            "How AI intake handles this instantly, qualifies the case type, and books the "
             "consultation directly into your calendar\n"
-            "- a no-risk 14-day pilot tied to booked consultations\n\n"
+            "A no-risk 14-day pilot tied to booked consultations\n\n"
             "Happy to walk through it for {clinic} on a quick 15-min call.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
-        "dm": "Hey {name} — law firms lose clients to whoever responds first. I built AI intake that qualifies cases and books consultations automatically. Worth a look?",
+        "dm": "Hey {name}, law firms lose clients to whoever responds first. Built AI intake that qualifies cases and books consultations automatically. Worth a look?",
         "linkedin": "Hi {name}, I help law firms stop losing qualified leads to slow intake response. AI system that books consultations automatically. Would love to connect.",
         "loom_script": (
-            "0-15s: Hey {name}, I want to show you how many consultations {clinic} is likely losing to slow intake.\n"
-            "15-45s: Potential clients shop multiple firms simultaneously — first firm to respond, qualify their case, and offer a booking wins. Slow intake loses them every time.\n"
+            "0-15s: Hey {name}, want to show you how many consultations {clinic} is likely losing to slow intake.\n"
+            "15-45s: Potential clients shop multiple firms at once. First firm to respond, qualify the case, and offer a booking wins. Slow intake loses them every time.\n"
             "45-75s: AI responds instantly, qualifies the case type, and books the consultation directly into your calendar.\n"
             "75-90s: 14-day pilot tied to booked consultations. Works, we continue. Doesn't, we stop."
         ),
@@ -561,52 +561,52 @@ VERTICAL_TEMPLATES = {
         ],
         "touch1": (
             "Hey {name},\n\n"
-            "Most dealerships lose online buyers who inquire but never get a fast enough "
-            "response to book a test drive or appointment.\n\n"
-            "I have a quick idea that handles follow-up automatically. Worth a 2-minute look?\n\n"
-            "— Damarley"
+            "Most dealerships lose online buyers simply because the response takes too "
+            "long and by then they've already booked somewhere else.\n\n"
+            "Got a quick idea that handles follow-up automatically. Worth a 2-minute look?\n\n"
+            "Damarley"
         ),
         "touch2": (
             "Hey {name},\n\n"
-            "Online auto buyers decide within 30 minutes — if they don't hear back, "
-            "they move to the next dealership.\n\n"
-            "I've built an AI follow-up system that responds instantly and books "
-            "appointments before the lead goes cold. Relevant for {clinic}?\n\n"
-            "— Damarley"
+            "Online auto buyers decide within 30 minutes. If they don't hear back they "
+            "move to the next dealership on their list.\n\n"
+            "Built an AI follow-up system that responds instantly and books appointments "
+            "before the lead goes cold. Relevant for {clinic}?\n\n"
+            "Damarley"
         ),
         "touch3": (
             "Hey {name},\n\n"
-            "Not trying to be persistent for the sake of it — I genuinely think there's "
+            "Not trying to be persistent for the sake of it. Genuinely think there's "
             "something here for {clinic}.\n\n"
-            "Converting online inquiries into booked appointments — is that on your radar?\n\n"
-            "— Damarley"
+            "Converting online inquiries into booked appointments, is that on your radar?\n\n"
+            "Damarley"
         ),
         "touch4": (
             "Hey {name},\n\n"
-            "Last one from me — closing this out.\n\n"
+            "Last one from me. Closing this out.\n\n"
             "If turning online leads into appointments ever becomes a priority, I'm easy to reach.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
         "loom_email_subject": "Quick Loom I recorded for {clinic}",
         "loom_email": (
             "Hey {name},\n\n"
-            "Thanks for getting back — I put together a short Loom specifically for {clinic} "
+            "Thanks for getting back. Put together a short Loom specifically for {clinic} "
             "showing where online buyers are going cold.\n\n"
             "[LOOM LINK]\n\n"
-            "I cover:\n"
-            "- why online auto buyers decide within 30 minutes and what that means for {clinic}\n"
-            "- how AI follows up instantly, qualifies the buyer, and books appointments "
+            "In the video I cover:\n"
+            "Why online auto buyers decide within 30 minutes and what that means for {clinic}\n"
+            "How AI follows up instantly, qualifies the buyer, and books appointments "
             "directly into your calendar\n"
-            "- a 14-day pilot tied to booked appointments\n\n"
+            "A 14-day pilot tied to booked appointments\n\n"
             "Happy to walk through it on a quick 15-min call.\n\n"
-            "— Damarley"
+            "Damarley"
         ),
-        "dm": "Hey {name} — auto buyers go to whoever responds fastest online. I built AI that follows up instantly and books appointments automatically. Worth a look?",
+        "dm": "Hey {name}, auto buyers go to whoever responds fastest online. Built AI that follows up instantly and books appointments automatically. Worth a look?",
         "linkedin": "Hi {name}, I help auto businesses convert more online inquiries into booked appointments with AI follow-up. Would love to connect.",
         "loom_script": (
             "0-15s: Hey {name}, want to show you exactly where {clinic} is losing online buyers.\n"
-            "15-45s: Buyer submits a form — waits 2 hours — already bought from someone else. This is the reality for most dealerships.\n"
-            "45-75s: AI responds within 60 seconds, qualifies the buyer (budget? trade-in? financing?), books the test drive or appointment directly into your calendar.\n"
+            "15-45s: Buyer submits a form, waits 2 hours, already bought from someone else. This is the reality for most dealerships.\n"
+            "45-75s: AI responds within 60 seconds, qualifies the buyer (budget, trade-in, financing), books the test drive or appointment directly into your calendar.\n"
             "75-90s: 14-day pilot tied to booked appointments. Works, we continue. Doesn't, we stop."
         ),
     },
@@ -618,48 +618,48 @@ DEFAULT_TEMPLATE = {
     "touch1": (
         "Hey {name},\n\n"
         "Most businesses like {clinic} lose leads because follow-up is too slow.\n\n"
-        "I have a quick idea that handles it automatically. Worth a 2-minute look?\n\n"
-        "— Damarley"
+        "Got a quick idea that handles it automatically. Worth a 2-minute look?\n\n"
+        "Damarley"
     ),
     "touch2": (
         "Hey {name},\n\n"
-        "Quick data point: businesses that follow up within 5 minutes convert "
-        "at dramatically higher rates than those that wait.\n\n"
-        "I've built an AI system that closes that gap for {clinic}. Is this relevant?\n\n"
-        "— Damarley"
+        "Businesses that follow up within 5 minutes convert at dramatically higher "
+        "rates than those that wait. Most are still doing it manually.\n\n"
+        "Built an AI system that closes that gap for {clinic}. Relevant?\n\n"
+        "Damarley"
     ),
     "touch3": (
         "Hey {name},\n\n"
-        "Still think there's something here for {clinic} — but don't want to keep "
-        "messaging if timing isn't right.\n\n"
-        "Converting more inquiries into appointments — is that a priority right now?\n\n"
-        "— Damarley"
+        "Still think there's something here for {clinic} but don't want to keep "
+        "messaging if the timing isn't right.\n\n"
+        "Converting more inquiries into appointments, is that a priority right now?\n\n"
+        "Damarley"
     ),
     "touch4": (
         "Hey {name},\n\n"
-        "Last one from me — closing this out.\n\n"
+        "Last one from me. Closing this out.\n\n"
         "If improving lead follow-up ever becomes a priority, feel free to reach back.\n\n"
-        "— Damarley"
+        "Damarley"
     ),
     "loom_email_subject": "Quick Loom I recorded for {clinic}",
     "loom_email": (
         "Hey {name},\n\n"
-        "Thanks for getting back — I put together a short Loom specifically for {clinic} "
+        "Thanks for getting back. Put together a short Loom specifically for {clinic} "
         "showing exactly where leads are slipping through.\n\n"
         "[LOOM LINK]\n\n"
-        "I cover:\n"
-        "- where and why inquiries go cold for businesses like {clinic}\n"
-        "- how AI responds instantly, qualifies the lead, and books appointments "
+        "In the video I cover:\n"
+        "Where and why inquiries go cold for businesses like {clinic}\n"
+        "How AI responds instantly, qualifies the lead, and books appointments "
         "directly into your calendar\n"
-        "- a no-risk 14-day pilot tied to booked appointments\n\n"
+        "A no-risk 14-day pilot tied to booked appointments\n\n"
         "Happy to walk through it on a quick 15-min call.\n\n"
-        "— Damarley"
+        "Damarley"
     ),
-    "dm": "Hey {name} — most businesses lose leads to slow follow-up. I built an AI system that responds instantly and books appointments automatically. Worth a look?",
+    "dm": "Hey {name}, most businesses lose leads to slow follow-up. Built an AI system that responds instantly and books appointments automatically. Worth a look?",
     "linkedin": "Hi {name}, I help businesses stop losing leads with AI follow-up that books appointments automatically. Would love to connect.",
     "loom_script": (
         "0-15s: Hey {name}, want to show you exactly where {clinic} is losing leads.\n"
-        "15-45s: Every minute you wait to follow up, lead quality drops. Most businesses are losing 30-40% of inquiries to slow response.\n"
+        "15-45s: Every minute you wait to follow up, lead quality drops. Most businesses lose 30-40% of inquiries to slow response.\n"
         "45-75s: AI responds instantly, qualifies the lead, books the appointment into your calendar automatically.\n"
         "75-90s: 14-day pilot tied to booked appointments. Works, we continue. Doesn't, we stop."
     ),

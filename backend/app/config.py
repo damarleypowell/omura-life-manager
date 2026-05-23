@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # ── AI Provider Keys ──
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None      # Pro — supervisor/brain
+    GEMINI_FLASH_KEY: Optional[str] = None   # Flash — worker agents
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # ── External Services ──

@@ -10,7 +10,10 @@ from email.mime.multipart import MIMEMultipart
 
 import httpx
 
+import logging as _logging
 from backend.app.config import settings
+
+_send_log = _logging.getLogger("email_utils")
 
 
 def send_via_sendgrid(to: str, subject: str, body: str, cc: str = None, html_body: str = None) -> dict:
@@ -18,17 +21,29 @@ def send_via_sendgrid(to: str, subject: str, body: str, cc: str = None, html_bod
 
     Function name kept as send_via_sendgrid to avoid breaking all callers.
     """
+    gmail_api_error: str | None = None
+
     # ── Try Gmail API first (works on Railway — HTTPS, not SMTP) ──
     try:
         from backend.app.google_utils import get_google_access_token
         access_token = get_google_access_token()
         if access_token:
             return _send_via_gmail_api(access_token, to, subject, body, cc, html_body)
-    except Exception:
-        pass  # Fall through to SMTP
+        else:
+            gmail_api_error = "No Google OAuth token stored — visit /auth/google to connect Gmail"
+    except Exception as _e:
+        gmail_api_error = f"Gmail API error: {_e}"
+        _send_log.warning("Gmail API send failed, trying SMTP fallback: %s", _e)
 
     # ── Fallback: Gmail SMTP (works locally, blocked on Railway) ──
-    return _send_via_smtp(to, subject, body, cc, html_body)
+    try:
+        return _send_via_smtp(to, subject, body, cc, html_body)
+    except Exception as _smtp_e:
+        # Both paths failed — raise a combined error so the caller knows why
+        raise RuntimeError(
+            f"Email delivery failed — Gmail API: [{gmail_api_error}]; "
+            f"SMTP fallback: [{_smtp_e}]"
+        ) from _smtp_e
 
 
 def _build_mime(to: str, subject: str, body: str, cc: str = None, html_body: str = None):

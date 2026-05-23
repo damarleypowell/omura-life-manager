@@ -24,7 +24,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import anthropic
+from google import genai
+from google.genai import types
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, cast, String
 
@@ -753,7 +754,9 @@ class SupervisorAI:
     """
 
     AGENT_NAME = "supervisor"
-    MODEL = "claude-sonnet-4-6"
+    # Flash: 500 req/day free. Pro: only 25 req/day free — not practical for a chat supervisor.
+    # Swap to "gemini-2.5-pro" here once you have a paid tier.
+    MODEL = "gemini-2.5-flash"
     MAX_CONTEXT_MESSAGES = 20
     MAX_IMPORTED_CONTEXT_ITEMS = 15
     MAX_TOOL_ITERATIONS = 10
@@ -764,7 +767,10 @@ class SupervisorAI:
 
     def __init__(self, db: Session, event_callback=None) -> None:
         self.db = db
-        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        # Use Flash key for supervisor — 500 req/day free vs Pro's 25 req/day
+        # Switch to GEMINI_API_KEY (Pro) here once on a paid plan
+        api_key = settings.GEMINI_FLASH_KEY or settings.GEMINI_API_KEY
+        self.client = genai.Client(api_key=api_key)
         self.logger = OmuraLogger("supervisor_ai")
         # Optional callback(event_type: str, data: dict) for real-time streaming
         self._emit = event_callback or (lambda etype, data: None)
@@ -794,14 +800,24 @@ class SupervisorAI:
             # Build the system prompt with current operational state
             system_prompt = self._build_system_prompt()
 
-            # Load conversation history and imported context
-            context = self._load_context()
-            messages = context["messages"]
+            # Load conversation history and append current user message
+            contents = self._load_context()
+            contents.append(types.Content(
+                role="user",
+                parts=[types.Part(text=user_message)],
+            ))
 
-            # Append the current user message
-            messages.append({"role": "user", "content": user_message})
+            # Build Gemini tool definitions from SUPERVISOR_TOOLS
+            gemini_tools = [types.Tool(function_declarations=[
+                types.FunctionDeclaration(
+                    name=t["name"],
+                    description=t["description"],
+                    parameters=t["input_schema"],
+                )
+                for t in SUPERVISOR_TOOLS
+            ])]
 
-            # Run the Claude tool-use loop
+            # Run the Gemini tool-use loop
             iteration = 0
             final_reply = ""
 
@@ -810,94 +826,72 @@ class SupervisorAI:
             while iteration < self.MAX_TOOL_ITERATIONS:
                 iteration += 1
                 self.logger.info(
-                    f"Claude API call — iteration {iteration}, "
-                    f"messages: {len(messages)}"
+                    f"Gemini API call — iteration {iteration}, "
+                    f"contents: {len(contents)}"
                 )
                 if iteration > 1:
                     self._emit("thinking", {"message": "Processing results...", "iteration": iteration})
 
-                response = self.client.messages.create(
+                response = self.client.models.generate_content(
                     model=self.MODEL,
-                    max_tokens=2048,
-                    system=system_prompt,
-                    tools=SUPERVISOR_TOOLS,
-                    messages=messages,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        tools=gemini_tools,
+                        temperature=0.3,
+                        max_output_tokens=2048,
+                    ),
                 )
 
-                # Check if the response contains tool use blocks
-                has_tool_use = any(
-                    block.type == "tool_use" for block in response.content
-                )
+                # Check if the response contains function calls
+                function_calls = response.function_calls or []
 
-                if response.stop_reason == "end_turn" or not has_tool_use:
-                    # Extract final text from the response
-                    text_parts = []
-                    for block in response.content:
-                        if hasattr(block, "text"):
-                            text_parts.append(block.text)
-                    final_reply = "\n".join(text_parts)
+                if not function_calls:
+                    # Final text response — extract and break
+                    final_reply = response.text or ""
                     break
 
-                # Process tool calls
-                # First, append the assistant's message (with tool_use blocks)
-                assistant_content = []
-                for block in response.content:
-                    if block.type == "text":
-                        assistant_content.append({
-                            "type": "text",
-                            "text": block.text,
-                        })
-                    elif block.type == "tool_use":
-                        assistant_content.append({
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        })
+                # Append the model's response (with function call parts) to history
+                contents.append(response.candidates[0].content)
 
-                messages.append({"role": "assistant", "content": assistant_content})
+                # Execute each tool call and collect function responses
+                function_response_parts = []
+                for fc in function_calls:
+                    self.logger.info(
+                        f"Executing tool: {fc.name} "
+                        f"with args: {json.dumps(dict(fc.args), default=str)[:500]}"
+                    )
+                    tool_input = dict(fc.args)
+                    self._emit("tool_start", {
+                        "tool": fc.name,
+                        "input": {k: v for k, v in tool_input.items() if k not in ("body", "html_body")},
+                    })
 
-                # Execute each tool call and collect results
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        self.logger.info(
-                            f"Executing tool: {block.name} "
-                            f"with input: {json.dumps(block.input, default=str)[:500]}"
+                    result = self._execute_single_tool(fc.name, tool_input)
+                    actions_taken.append({
+                        "tool": fc.name,
+                        "input": tool_input,
+                        "result": result,
+                    })
+
+                    self._emit("tool_done", {
+                        "tool": fc.name,
+                        "success": result.get("success", True) if isinstance(result, dict) else True,
+                        "summary": _summarize_tool_result(fc.name, result),
+                    })
+
+                    if fc.name == "request_internet":
+                        internet_requested = True
+
+                    function_response_parts.append(
+                        types.Part.from_function_response(
+                            name=fc.name,
+                            response=result if isinstance(result, dict) else {"result": str(result)},
                         )
-                        # Emit tool start event
-                        self._emit("tool_start", {
-                            "tool": block.name,
-                            "input": {k: v for k, v in block.input.items() if k not in ("body", "html_body")},
-                        })
+                    )
 
-                        result = self._execute_single_tool(
-                            block.name, block.input
-                        )
-                        actions_taken.append({
-                            "tool": block.name,
-                            "input": block.input,
-                            "result": result,
-                        })
-
-                        # Emit tool result event
-                        self._emit("tool_done", {
-                            "tool": block.name,
-                            "success": result.get("success", True) if isinstance(result, dict) else True,
-                            "summary": _summarize_tool_result(block.name, result),
-                        })
-
-                        if block.name == "request_internet":
-                            internet_requested = True
-
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result, default=str),
-                        })
-
-                # Append tool results as a user message
-                messages.append({"role": "user", "content": tool_results})
+                # Append function responses as a user message
+                contents.append(types.Content(role="user", parts=function_response_parts))
 
             else:
                 # Exceeded max iterations
@@ -950,33 +944,18 @@ class SupervisorAI:
                 "internet_requested": internet_requested,
             }
 
-        except anthropic.APIConnectionError as exc:
-            self.logger.error(f"Anthropic API connection error: {exc}")
-            return self._error_response(
-                "I'm having trouble connecting to my AI backend. "
-                "Please check the API key and network connection.",
-                exc, user_message, start_time,
-            )
-        except anthropic.RateLimitError as exc:
-            self.logger.error(f"Anthropic rate limit: {exc}")
-            return self._error_response(
-                "I've hit the API rate limit. Please try again in a moment.",
-                exc, user_message, start_time,
-            )
-        except anthropic.APIStatusError as exc:
-            self.logger.error(f"Anthropic API error {exc.status_code}: {exc}")
-            return self._error_response(
-                f"AI service returned an error (status {exc.status_code}). "
-                "I'll keep working with what I have.",
-                exc, user_message, start_time,
-            )
         except Exception as exc:
-            self.logger.error(f"Unexpected error in chat: {traceback.format_exc()}")
-            return self._error_response(
-                "Something unexpected went wrong. The error has been logged "
-                "and I'll make sure it gets fixed.",
-                exc, user_message, start_time,
-            )
+            self.logger.error(f"Error in chat: {traceback.format_exc()}")
+            msg = str(exc)
+            if "quota" in msg.lower() or "rate" in msg.lower():
+                friendly = "I've hit the API rate limit. Please try again in a moment."
+            elif "api_key" in msg.lower() or "unauthorized" in msg.lower() or "invalid" in msg.lower():
+                friendly = "Invalid or missing Gemini API key. Check GEMINI_API_KEY in your .env."
+            elif "connect" in msg.lower() or "timeout" in msg.lower():
+                friendly = "I'm having trouble connecting to Gemini. Check your network connection."
+            else:
+                friendly = "Something unexpected went wrong. The error has been logged."
+            return self._error_response(friendly, exc, user_message, start_time)
 
     # ------------------------------------------------------------------
     # System prompt construction
@@ -1131,13 +1110,13 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
     # Context loading
     # ------------------------------------------------------------------
 
-    def _load_context(self) -> Dict[str, Any]:
-        """Load recent chat history to maintain conversation continuity.
+    def _load_context(self) -> List[Any]:
+        """Load recent chat history as Gemini Content objects.
 
         Returns
         -------
-        dict
-            {"messages": list} — formatted for the Claude messages API.
+        list
+            List of types.Content objects for the Gemini API.
         """
         try:
             recent_messages = (
@@ -1146,27 +1125,26 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
                 .limit(self.MAX_CONTEXT_MESSAGES)
                 .all()
             )
-            # Reverse to chronological order
             recent_messages = list(reversed(recent_messages))
         except Exception as exc:
             self.logger.warning(f"Failed to load chat history: {exc}")
             recent_messages = []
 
-        messages = []
+        contents = []
         for msg in recent_messages:
             role = msg.role
-            # Claude API only accepts "user" and "assistant" roles in messages
-            if role not in ("user", "assistant"):
+            # Gemini uses "user" and "model" (not "assistant")
+            if role == "assistant":
+                role = "model"
+            if role not in ("user", "model"):
                 continue
-            messages.append({
-                "role": role,
-                "content": msg.content,
-            })
+            contents.append(types.Content(
+                role=role,
+                parts=[types.Part(text=msg.content or "")],
+            ))
 
-        # Ensure messages alternate properly (Claude requires user/assistant alternation)
-        messages = self._ensure_message_alternation(messages)
-
-        return {"messages": messages}
+        contents = self._ensure_message_alternation(contents)
+        return contents
 
     def _load_imported_context(self) -> str:
         """Load imported context from ChatGPT exports and other sources.
@@ -2326,42 +2304,37 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _ensure_message_alternation(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Ensure messages strictly alternate between user and assistant.
+    def _ensure_message_alternation(contents: List[Any]) -> List[Any]:
+        """Ensure Gemini Content objects strictly alternate between user and model.
 
-        The Claude API requires that messages alternate roles. This method
-        removes any consecutive same-role messages by keeping the last one
-        in each consecutive group.
+        Gemini requires strict user/model alternation. Consecutive same-role
+        entries are collapsed by keeping the last one.
 
         Parameters
         ----------
-        messages : list
-            List of message dicts with 'role' and 'content'.
+        contents : list
+            List of types.Content objects.
 
         Returns
         -------
         list
-            Cleaned message list with proper alternation.
+            Cleaned list with proper alternation, starting with 'user'.
         """
-        if not messages:
+        if not contents:
             return []
 
-        cleaned: List[Dict[str, Any]] = []
-        for msg in messages:
-            if cleaned and cleaned[-1]["role"] == msg["role"]:
-                # Merge consecutive same-role messages
-                existing = cleaned[-1]["content"]
-                new_content = msg["content"]
-                if isinstance(existing, str) and isinstance(new_content, str):
-                    cleaned[-1]["content"] = existing + "\n\n" + new_content
-                else:
-                    # Replace with the newer message if content types differ
-                    cleaned[-1] = msg
-            else:
-                cleaned.append(msg)
+        def _role(c: Any) -> str:
+            return c.role if hasattr(c, "role") else c.get("role", "")
 
-        # Claude requires the first message to be from the user
-        if cleaned and cleaned[0]["role"] != "user":
+        cleaned: List[Any] = []
+        for item in contents:
+            if cleaned and _role(cleaned[-1]) == _role(item):
+                cleaned[-1] = item  # keep the newer entry
+            else:
+                cleaned.append(item)
+
+        # Gemini requires the first message to be from the user
+        while cleaned and _role(cleaned[0]) != "user":
             cleaned = cleaned[1:]
 
         return cleaned

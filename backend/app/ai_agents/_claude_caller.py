@@ -1,9 +1,8 @@
 """
-Shared Gemini API caller for all Omura AI agents.
+Shared AI caller for all Omura worker agents.
 
-Provides a reusable function that sends prompts to the Google Gemini API
-and parses JSON-structured responses. Uses Gemini Flash for worker agents.
-Falls back gracefully on failure.
+Primary: Anthropic Claude Haiku (fast, high rate limits).
+Fallback: Google Gemini Flash (if Anthropic unavailable/rate-limited).
 """
 
 from __future__ import annotations
@@ -14,35 +13,92 @@ import time
 import traceback
 from typing import Any, Optional
 
-from google import genai
-from google.genai import types
-
 from backend.app.config import settings
 from backend.app.utils.logging import OmuraLogger
 
-_logger = OmuraLogger("gemini_caller")
+_logger = OmuraLogger("ai_caller")
 
-# Shared client instance — created lazily
-_client: Optional[genai.Client] = None
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+GEMINI_MODEL = "gemini-2.0-flash"
 
-# Flash for all worker agents — fast and free-tier friendly
-MODEL = "gemini-2.5-flash"
+# Lazy-initialized clients
+_anthropic_client = None
+_gemini_client = None
 
 
-_RETRY_DELAYS = [15, 30, 60]  # seconds between retries on rate-limit
+def _get_anthropic():
+    global _anthropic_client
+    if _anthropic_client is None and settings.ANTHROPIC_API_KEY:
+        import anthropic
+        _anthropic_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    return _anthropic_client
+
+
+def _get_gemini():
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = settings.GEMINI_FLASH_KEY or settings.GEMINI_API_KEY
+        if api_key:
+            from google import genai
+            _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
+
 
 def _is_rate_limit(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return any(k in msg for k in ("429", "quota", "resource_exhausted", "rate"))
+    return any(k in msg for k in ("429", "quota", "resource_exhausted", "rate_limit", "rate limit", "overloaded"))
 
 
-def _get_client() -> genai.Client:
-    """Return a shared Gemini Flash client instance."""
-    global _client
-    if _client is None:
-        api_key = settings.GEMINI_FLASH_KEY or settings.GEMINI_API_KEY
-        _client = genai.Client(api_key=api_key)
-    return _client
+def _call_anthropic(prompt: str, system_prompt: str, agent_name: str, temperature: float, max_tokens: int) -> Optional[str]:
+    client = _get_anthropic()
+    if not client:
+        return None
+    for attempt, delay in enumerate([0, 20, 60]):
+        if delay:
+            _logger.warning(f"[{agent_name}] Anthropic rate limited — retrying in {delay}s")
+            time.sleep(delay)
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text
+        except Exception as exc:
+            if _is_rate_limit(exc) and attempt < 2:
+                continue
+            _logger.error(f"[{agent_name}] Anthropic error: {exc}")
+            return None
+
+
+def _call_gemini(prompt: str, system_prompt: str, agent_name: str, temperature: float, max_tokens: int) -> Optional[str]:
+    client = _get_gemini()
+    if not client:
+        return None
+    from google.genai import types
+    for attempt, delay in enumerate([0, 20, 60]):
+        if delay:
+            _logger.warning(f"[{agent_name}] Gemini rate limited — retrying in {delay}s")
+            time.sleep(delay)
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            return response.text or ""
+        except Exception as exc:
+            if _is_rate_limit(exc) and attempt < 2:
+                continue
+            _logger.error(f"[{agent_name}] Gemini error: {exc}")
+            return None
 
 
 def call_claude(
@@ -52,46 +108,17 @@ def call_claude(
     temperature: float = 0.3,
     max_tokens: int = 2048,
 ) -> Optional[str]:
-    """Call Gemini Flash API and return the raw text response.
+    """Call AI and return raw text. Tries Anthropic first, falls back to Gemini."""
+    result = _call_anthropic(prompt, system_prompt, agent_name, temperature, max_tokens)
+    if result is not None:
+        _logger.debug(f"[{agent_name}] Anthropic call successful ({len(result)} chars)")
+        return result
 
-    Args:
-        prompt: The user message to send.
-        system_prompt: The system prompt defining agent behavior.
-        agent_name: Name of the calling agent (for logging).
-        temperature: Sampling temperature (lower = more deterministic).
-        max_tokens: Maximum tokens in the response.
-
-    Returns:
-        The text content of the response, or None on failure.
-    """
-    if not (settings.GEMINI_FLASH_KEY or settings.GEMINI_API_KEY):
-        _logger.warning(f"[{agent_name}] No GEMINI_FLASH_KEY or GEMINI_API_KEY configured, skipping API call")
-        return None
-
-    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
-        if delay:
-            _logger.warning(f"[{agent_name}] Rate limited — retrying in {delay}s (attempt {attempt + 1})")
-            time.sleep(delay)
-        try:
-            client = _get_client()
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            result = response.text or ""
-            _logger.debug(f"[{agent_name}] Gemini API call successful, response length: {len(result)}")
-            return result
-        except Exception as exc:
-            if _is_rate_limit(exc) and attempt < len(_RETRY_DELAYS):
-                continue
-            _logger.error(f"[{agent_name}] Gemini API error: {traceback.format_exc()}")
-            return None
+    _logger.warning(f"[{agent_name}] Anthropic unavailable — falling back to Gemini")
+    result = _call_gemini(prompt, system_prompt, agent_name, temperature, max_tokens)
+    if result is not None:
+        _logger.debug(f"[{agent_name}] Gemini fallback successful ({len(result)} chars)")
+    return result
 
 
 def call_claude_json(
@@ -101,22 +128,7 @@ def call_claude_json(
     temperature: float = 0.3,
     max_tokens: int = 2048,
 ) -> Optional[dict]:
-    """Call Gemini API and parse the response as JSON.
-
-    The system prompt should instruct the model to respond with valid JSON.
-    This function attempts to extract JSON from the response, handling
-    cases where the model wraps JSON in markdown code blocks.
-
-    Args:
-        prompt: The user message to send.
-        system_prompt: The system prompt (should request JSON output).
-        agent_name: Name of the calling agent (for logging).
-        temperature: Sampling temperature.
-        max_tokens: Maximum tokens in the response.
-
-    Returns:
-        A parsed dict from the JSON response, or None on failure.
-    """
+    """Call AI and parse response as JSON."""
     raw = call_claude(
         prompt=prompt,
         system_prompt=system_prompt,
@@ -124,50 +136,29 @@ def call_claude_json(
         temperature=temperature,
         max_tokens=max_tokens,
     )
-
     if raw is None:
         return None
-
     return _parse_json_response(raw, agent_name)
 
 
 def _parse_json_response(text: str, agent_name: str = "agent") -> Optional[dict]:
-    """Extract and parse JSON from a Gemini response.
-
-    Handles common response formats:
-    - Pure JSON
-    - JSON wrapped in ```json ... ``` code blocks
-    - JSON with leading/trailing text
-
-    Args:
-        text: The raw text response.
-        agent_name: For logging purposes.
-
-    Returns:
-        Parsed dict or None if parsing fails.
-    """
     if not text:
         return None
-
     text = text.strip()
 
-    # Try direct JSON parse first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Try extracting from markdown code blocks
     if "```" in text:
-        pattern = r'```(?:json)?\s*\n?(.*?)\n?\s*```'
-        match = re.search(pattern, text, re.DOTALL)
+        match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group(1).strip())
             except json.JSONDecodeError:
                 pass
 
-    # Try finding the first { ... } or [ ... ] block
     brace_start = text.find('{')
     bracket_start = text.find('[')
 
@@ -193,10 +184,9 @@ def _parse_json_response(text: str, agent_name: str = "agent") -> Optional[dict]
                 depth -= 1
                 if depth == 0:
                     try:
-                        parsed = json.loads(text[bracket_start:i + 1])
-                        return {"items": parsed}
+                        return {"items": json.loads(text[bracket_start:i + 1])}
                     except json.JSONDecodeError:
                         break
 
-    _logger.warning(f"[{agent_name}] Failed to parse JSON from response: {text[:200]}...")
+    _logger.warning(f"[{agent_name}] Failed to parse JSON: {text[:200]}...")
     return None

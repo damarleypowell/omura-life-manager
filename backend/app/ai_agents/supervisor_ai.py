@@ -756,7 +756,7 @@ class SupervisorAI:
     AGENT_NAME = "supervisor"
     # Flash: 500 req/day free. Pro: only 25 req/day free — not practical for a chat supervisor.
     # Swap to "gemini-2.5-pro" here once you have a paid tier.
-    MODEL = "gemini-2.5-flash"
+    MODEL = "gemini-2.0-flash"
     MAX_CONTEXT_MESSAGES = 20
     MAX_IMPORTED_CONTEXT_ITEMS = 15
     MAX_TOOL_ITERATIONS = 10
@@ -970,12 +970,12 @@ class SupervisorAI:
         except Exception as exc:
             self.logger.error(f"Error in chat: {traceback.format_exc()}")
             msg = str(exc)
-            if "quota" in msg.lower() or "rate" in msg.lower():
-                friendly = "I've hit the API rate limit. Please try again in a moment."
+            if "quota" in msg.lower() or "rate" in msg.lower() or "resource_exhausted" in msg.lower() or "429" in msg:
+                friendly = "Gemini daily quota exhausted (500 req/day on free tier). I've already retried — quota resets at midnight Pacific. Try again tomorrow or add a paid API key."
             elif "api_key" in msg.lower() or "unauthorized" in msg.lower() or "invalid" in msg.lower():
                 friendly = "Invalid or missing Gemini API key. Check GEMINI_API_KEY in your .env."
             elif "connect" in msg.lower() or "timeout" in msg.lower():
-                friendly = "I'm having trouble connecting to Gemini. Check your network connection."
+                friendly = "I'm having trouble connecting to the AI. Check your network connection."
             else:
                 friendly = "Something unexpected went wrong. The error has been logged."
             return self._error_response(friendly, exc, user_message, start_time)

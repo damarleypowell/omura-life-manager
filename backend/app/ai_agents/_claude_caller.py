@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import traceback
 from typing import Any, Optional
 
@@ -26,6 +27,13 @@ _client: Optional[genai.Client] = None
 
 # Flash for all worker agents — fast and free-tier friendly
 MODEL = "gemini-2.5-flash"
+
+
+_RETRY_DELAYS = [15, 30, 60]  # seconds between retries on rate-limit
+
+def _is_rate_limit(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(k in msg for k in ("429", "quota", "resource_exhausted", "rate"))
 
 
 def _get_client() -> genai.Client:
@@ -60,26 +68,30 @@ def call_claude(
         _logger.warning(f"[{agent_name}] No GEMINI_FLASH_KEY or GEMINI_API_KEY configured, skipping API call")
         return None
 
-    try:
-        client = _get_client()
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-
-        result = response.text or ""
-        _logger.debug(f"[{agent_name}] Gemini API call successful, response length: {len(result)}")
-        return result
-
-    except Exception as exc:
-        _logger.error(f"[{agent_name}] Gemini API error: {traceback.format_exc()}")
-        return None
+    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
+        if delay:
+            _logger.warning(f"[{agent_name}] Rate limited — retrying in {delay}s (attempt {attempt + 1})")
+            time.sleep(delay)
+        try:
+            client = _get_client()
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            result = response.text or ""
+            _logger.debug(f"[{agent_name}] Gemini API call successful, response length: {len(result)}")
+            return result
+        except Exception as exc:
+            if _is_rate_limit(exc) and attempt < len(_RETRY_DELAYS):
+                continue
+            _logger.error(f"[{agent_name}] Gemini API error: {traceback.format_exc()}")
+            return None
 
 
 def call_claude_json(

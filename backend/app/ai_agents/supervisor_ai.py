@@ -832,18 +832,35 @@ class SupervisorAI:
                 if iteration > 1:
                     self._emit("thinking", {"message": "Processing results...", "iteration": iteration})
 
-                response = self.client.models.generate_content(
-                    model=self.MODEL,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        tools=gemini_tools,
-                        temperature=0.3,
-                        max_output_tokens=2048,
-                        # Disable thinking — cuts latency significantly on Flash
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                )
+                _retry_delays = [15, 30, 60]
+                response = None
+                for _attempt, _delay in enumerate([0] + _retry_delays):
+                    if _delay:
+                        self.logger.warning(f"Rate limited — retrying in {_delay}s")
+                        self._emit("thinking", {"message": f"Rate limited, retrying in {_delay}s...", "iteration": iteration})
+                        time.sleep(_delay)
+                    try:
+                        response = self.client.models.generate_content(
+                            model=self.MODEL,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_prompt,
+                                tools=gemini_tools,
+                                temperature=0.3,
+                                max_output_tokens=2048,
+                                # Disable thinking — cuts latency significantly on Flash
+                                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                            ),
+                        )
+                        break
+                    except Exception as _exc:
+                        _msg = str(_exc).lower()
+                        _is_rate = any(k in _msg for k in ("429", "quota", "resource_exhausted", "rate"))
+                        if _is_rate and _attempt < len(_retry_delays):
+                            continue
+                        raise
+                if response is None:
+                    raise RuntimeError("Gemini API failed after retries")
 
                 # Check if the response contains function calls
                 function_calls = response.function_calls or []

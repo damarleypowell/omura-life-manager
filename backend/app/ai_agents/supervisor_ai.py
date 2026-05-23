@@ -840,6 +840,8 @@ class SupervisorAI:
                         tools=gemini_tools,
                         temperature=0.3,
                         max_output_tokens=2048,
+                        # Disable thinking — cuts latency significantly on Flash
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
 
@@ -847,8 +849,12 @@ class SupervisorAI:
                 function_calls = response.function_calls or []
 
                 if not function_calls:
-                    # Final text response — extract and break
-                    final_reply = response.text or ""
+                    # Extract text safely — response.text can raise if blocked
+                    try:
+                        final_reply = response.text or ""
+                    except Exception:
+                        parts = response.candidates[0].content.parts if response.candidates else []
+                        final_reply = " ".join(p.text for p in parts if hasattr(p, "text") and p.text)
                     break
 
                 # Append the model's response (with function call parts) to history

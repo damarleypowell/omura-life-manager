@@ -69,6 +69,7 @@ def call_claude(
                 system_instruction=system_prompt,
                 temperature=temperature,
                 max_output_tokens=max_tokens,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
 

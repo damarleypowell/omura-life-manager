@@ -240,14 +240,29 @@ def _detect_lead_replies(db, triaged_messages: list):
             except Exception:
                 pass
 
-        # Send personalized Loom email immediately
+        # Create a task reminding Damarley to record + send a Loom today
         try:
-            _send_loom_email(lead)
-            crud.log_agent_action(db, "automation", "loom_triggered",
+            from backend.app.database.models import Task, UrgencyLevel, TaskStatus
+            from datetime import date as _date, time as _time
+            first = (lead.name or "them").split()[0]
+            company = lead.company or lead.email or "unknown"
+            due = datetime.combine(_date.today(), _time(14, 0))  # 2pm today
+            task = Task(
+                title=f"Send Loom to {first} at {company} — they replied!",
+                description=(
+                    f"{first} ({lead.email}) replied to your outreach.\n"
+                    f"Record a quick 60-90s Loom for {company} and send it today."
+                ),
+                priority=UrgencyLevel.HIGH,
+                status=TaskStatus.TODO,
+                due_date=due,
+            )
+            db.add(task)
+            crud.log_agent_action(db, "automation", "loom_task_created",
                 input_data={"lead_id": lead.id, "email": lead.email},
                 status="success")
         except Exception as exc:
-            crud.log_agent_action(db, "automation", "loom_triggered",
+            crud.log_agent_action(db, "automation", "loom_task_created",
                 input_data={"lead_id": lead.id},
                 status="error", error_message=str(exc))
 

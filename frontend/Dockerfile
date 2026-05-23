@@ -2,13 +2,17 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install deps
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy app
 COPY . .
+
+# Render passes NEXT_PUBLIC_API_URL as an env var — bake it in at build time
+ARG NEXT_PUBLIC_API_URL=https://omura-life-manager.onrender.com
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+RUN npm run build
 
 EXPOSE 3000
 
-CMD ["npm", "run", "dev"]
+CMD ["npm", "start"]

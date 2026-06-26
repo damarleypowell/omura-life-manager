@@ -9,7 +9,7 @@ _load_dotenv(dotenv_path=_os.path.normpath(
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", ".env")
 ), override=True)
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -96,8 +96,19 @@ from backend.app.config import settings
 from backend.app.database.session import get_db, engine, Base
 from backend.app.database import crud, models
 
-# ── Create tables ──
-Base.metadata.create_all(bind=engine)
+# ── Create tables (retry — serverless Postgres like Neon drops the first
+#    connection while it cold-starts from suspend) ──
+import time as _time
+for _attempt in range(6):
+    try:
+        Base.metadata.create_all(bind=engine)
+        break
+    except Exception as _db_err:
+        if _attempt == 5:
+            raise
+        _wait = 2 + _attempt * 2
+        print(f"DB not ready (cold start?) — retry {_attempt + 1}/5 in {_wait}s: {str(_db_err)[:120]}")
+        _time.sleep(_wait)
 
 # ── Runtime migrations (add columns that may not exist in older DBs) ──
 from sqlalchemy import text as _sql_text, inspect as _inspect
@@ -131,6 +142,23 @@ try:
 except Exception as _mig_err:
     print(f"WARNING: Migration check failed: {_mig_err} — continuing startup")
 
+# ── Seed Titan Track roadmap (idempotent — no-op if already seeded) ──
+def _seed_titan():
+    from backend.app.database.session import SessionLocal
+    from backend.app.database.seed_titan import seed_titan
+    db = SessionLocal()
+    try:
+        result = seed_titan(db)
+        if result.get("seeded"):
+            print(f"Titan Track seeded: {result}")
+    finally:
+        db.close()
+
+try:
+    _seed_titan()
+except Exception as _seed_err:
+    print(f"WARNING: Titan seed failed: {_seed_err} — continuing startup")
+
 # ── Rate Limiting ──
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -161,7 +189,7 @@ app.add_middleware(
         "https://omura-life-manager.vercel.app",
         "https://omura-life-manager-damarleypowells-projects.vercel.app",
     ],
-    allow_origin_regex=r"https://omura-life-manager.*\.vercel\.app",
+    allow_origin_regex=r"https://omura-life-manager.*\.vercel\.app|http://localhost:\d+|http://127\.0\.0\.1:\d+",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control", "X-Requested-With"],
@@ -181,6 +209,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
+# ── Titan Track routers ──
+from backend.app.api import titan as _titan
+app.include_router(_titan.router)
+app.include_router(_titan.dashboard_router)
+
+
 # ══════════════════════════════════════════════
 # Scheduled Automation (APScheduler)
 # ══════════════════════════════════════════════
@@ -197,13 +231,18 @@ from backend.app.google_utils import get_google_access_token as _get_google_acce
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-_scheduler.add_job(_scheduled_inbox_triage, IntervalTrigger(minutes=30), id="inbox_triage", replace_existing=True)
-_scheduler.add_job(_scheduled_daily_briefing, CronTrigger(hour=8, minute=0), id="daily_briefing", replace_existing=True)
-_scheduler.add_job(_scheduled_weekly_pipeline, CronTrigger(day_of_week="mon", hour=9, minute=0), id="weekly_pipeline", replace_existing=True)
-_scheduler.add_job(_scheduled_daily_outreach, CronTrigger(hour=9, minute=0), id="daily_outreach", replace_existing=True)
-_scheduler.add_job(_scheduled_daily_inbox_categorize, CronTrigger(hour=6, minute=0), id="inbox_categorize", replace_existing=True)
-
-_scheduler.start()
+# Gated on SCHEDULER_ENABLED (default True) so a local/dev run can opt out of
+# automated outreach + inbox jobs by setting SCHEDULER_ENABLED=false.
+if settings.SCHEDULER_ENABLED:
+    _scheduler.add_job(_scheduled_inbox_triage, IntervalTrigger(minutes=30), id="inbox_triage", replace_existing=True)
+    _scheduler.add_job(_scheduled_daily_briefing, CronTrigger(hour=8, minute=0), id="daily_briefing", replace_existing=True)
+    _scheduler.add_job(_scheduled_weekly_pipeline, CronTrigger(day_of_week="mon", hour=9, minute=0), id="weekly_pipeline", replace_existing=True)
+    _scheduler.add_job(_scheduled_daily_outreach, CronTrigger(hour=9, minute=0), id="daily_outreach", replace_existing=True)
+    _scheduler.add_job(_scheduled_daily_inbox_categorize, CronTrigger(hour=6, minute=0), id="inbox_categorize", replace_existing=True)
+    _scheduler.start()
+    print("Scheduler started (automated jobs active).")
+else:
+    print("SCHEDULER_ENABLED=false — automated jobs disabled for this run.")
 
 
 # ══════════════════════════════════════════════
@@ -677,8 +716,11 @@ def get_scenario(scenario_id: int, db: Session = Depends(get_db)):
 # AI Agent Endpoints
 # ══════════════════════════════════════════════
 
+from backend.app.utils.serialization import strip_internal_keys as _strip_internal_keys
+
+
 @app.post("/api/ai/execute")
-def execute_ai_agent(request: AIAgentRequest, db: Session = Depends(get_db)):
+def execute_ai_agent(request: AIAgentRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Execute an AI agent action. Agents: inbox, content, project, crm, finance, health, market, scenario, automation."""
     from backend.app.ai_agents.inbox_ai import InboxAI
     from backend.app.ai_agents.content_ai import ContentAI
@@ -690,6 +732,7 @@ def execute_ai_agent(request: AIAgentRequest, db: Session = Depends(get_db)):
     from backend.app.ai_agents.scenario_ai import ScenarioAI
     from backend.app.ai_agents.automation_ai import AutomationAI
     from backend.app.ai_agents.outreach_ai import OutreachAI
+    from backend.app.ai_agents.tutor_agent import TutorAI
 
     agents = {
         "inbox": InboxAI,
@@ -702,6 +745,7 @@ def execute_ai_agent(request: AIAgentRequest, db: Session = Depends(get_db)):
         "scenario": ScenarioAI,
         "automation": AutomationAI,
         "outreach": OutreachAI,
+        "tutor": TutorAI,
     }
 
     if request.agent not in agents:
@@ -715,22 +759,48 @@ def execute_ai_agent(request: AIAgentRequest, db: Session = Depends(get_db)):
     try:
         result = method(**request.params)
         crud.log_agent_action(db, request.agent, request.action, request.params, result, "success")
-        return {"agent": request.agent, "action": request.action, "result": result}
+        # Strip agent internals (e.g. quiz answer keys) before anything leaves the
+        # process — response, English brief, and the persisted insight all use the
+        # sanitized copy. The raw result stays only in the internal audit log above.
+        safe_result = _strip_internal_keys(result)
+        # Instant English brief now; polished insight + native persistence off the hot path.
+        from backend.app.ai_agents.insights import humanize_brief, record_agent_insight_bg
+        background_tasks.add_task(record_agent_insight_bg, request.agent, request.action, safe_result)
+        return {"agent": request.agent, "action": request.action, "result": safe_result,
+                "summary": humanize_brief(request.agent, request.action, safe_result)}
     except Exception as e:
         crud.log_agent_action(db, request.agent, request.action, request.params, None, "error", str(e))
         raise HTTPException(500, f"Agent error: {str(e)}")
 
 
 @app.post("/api/ai/workflow")
-def run_workflow(request: WorkflowRequest, db: Session = Depends(get_db)):
+def run_workflow(request: WorkflowRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Run a named automation workflow."""
     from backend.app.ai_agents.automation_ai import AutomationAI
     automation = AutomationAI(db)
     try:
         result = automation.run_workflow(request.workflow, request.params)
-        return {"workflow": request.workflow, "result": result}
+        from backend.app.ai_agents.insights import humanize_brief, record_agent_insight_bg
+        background_tasks.add_task(record_agent_insight_bg, "automation", request.workflow, result)
+        return {"workflow": request.workflow, "result": result,
+                "summary": humanize_brief("automation", request.workflow, result)}
     except Exception as e:
         raise HTTPException(500, f"Workflow error: {str(e)}")
+
+
+@app.get("/api/insights")
+def list_insights(section: Optional[str] = None, limit: int = 10, db: Session = Depends(get_db)):
+    """Recent plain-English agent insights, optionally filtered by dashboard section."""
+    q = db.query(models.AgentInsight)
+    if section:
+        q = q.filter(models.AgentInsight.section == section)
+    rows = q.order_by(models.AgentInsight.created_at.desc()).limit(limit).all()
+    return [
+        {"id": r.id, "agent_name": r.agent_name, "action": r.action, "section": r.section,
+         "title": r.title, "summary": r.summary,
+         "created_at": r.created_at.isoformat() if r.created_at else None}
+        for r in rows
+    ]
 
 
 # ══════════════════════════════════════════════

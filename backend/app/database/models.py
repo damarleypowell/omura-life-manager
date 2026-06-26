@@ -349,3 +349,248 @@ class ImportedContext(Base):
     category = Column(String(100))  # goals, preferences, history, knowledge
     tags = Column(JSON, default=list)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentInsight(Base):
+    """Plain-English result of an agent/workflow run, tagged to the dashboard
+    section it belongs to, so output shows up where the user expects it."""
+    __tablename__ = "agent_insights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_name = Column(String(50), nullable=False)
+    action = Column(String(100))
+    section = Column(String(30), nullable=False, index=True)  # business|content|communication|health|scenarios|automation
+    title = Column(String(255))
+    summary = Column(Text)  # human-readable English — never raw JSON
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Titan Track — daily learning / leadership-development system
+# (See TITAN_TRACK_SPEC. Status/tier/confidence stored as documented
+#  strings — not SAEnum — so the schema works identically on SQLite and
+#  Postgres without enum-type migrations. Array fields use JSON, matching
+#  the rest of this schema, since SQLite has no native ARRAY type.)
+# ══════════════════════════════════════════════════════════════════════
+
+class LearningTrack(Base):
+    """One learning track (Skill, Decision-Making, Leadership, Discipline,
+    Stress, or the Horizon tier). Holds track-level progress."""
+    __tablename__ = "learning_tracks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(20), unique=True, nullable=False)  # A, B, C, D, E, HORIZON
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    target_tier = Column(String(20), default="now")  # now | horizon
+    cadence = Column(String(30), default="phase_gated")  # phase_gated | standing | quarterly
+    progress_pct = Column(Float, default=0.0)
+    color_theme = Column(String(20), default="#3B82F6")
+    order_index = Column(Integer, default=0)
+    extra_data = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    modules = relationship("LearningModule", back_populates="track", cascade="all, delete-orphan")
+
+
+class LearningModule(Base):
+    """An individual topic within a track. Carries its research basis,
+    confidence tag, prerequisites, and phase/sequencing metadata."""
+    __tablename__ = "learning_modules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    track_id = Column(Integer, ForeignKey("learning_tracks.id"), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    tier = Column(String(20), default="now")  # now | horizon
+    format = Column(String(30), default="course")  # course | case_study | dynamic_challenge | mixed
+    source_material = Column(Text)  # links / reading suggestions
+    research_basis = Column(Text)  # citation(s) the module rests on
+    confidence_level = Column(String(20), default="moderate")  # strong | moderate | contested | theoretical
+    confidence_note = Column(Text)  # the one-line "what this means" nuance for the UI badge
+    prerequisite_ids = Column(JSON, default=list)  # list of module ids
+    order_index = Column(Integer, default=0)
+    status = Column(String(20), default="locked")  # locked | available | in_progress | mastered
+    requires_failure_twin = Column(Boolean, default=False)
+    week_number = Column(Integer, nullable=True)  # phase-gated sequencing; null = standing practice
+    phase_code = Column(String(20), nullable=True)  # e.g. A1, C3
+    culminating_artifact = Column(Text, nullable=True)
+    extra_data = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    track = relationship("LearningTrack", back_populates="modules")
+    mastery_entries = relationship("MasteryEntry", back_populates="module", cascade="all, delete-orphan")
+
+
+class MasteryEntry(Base):
+    """One attempt at a module's gate — quiz score + explain-back result."""
+    __tablename__ = "mastery_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    module_id = Column(Integer, ForeignKey("learning_modules.id"), nullable=False)
+    attempt_number = Column(Integer, default=1)
+    quiz_score = Column(Float, default=0.0)  # 0-100
+    quiz_answers = Column(JSON, default=dict)
+    explain_back_transcript = Column(Text)
+    explain_back_passed = Column(Boolean, default=False)
+    ai_feedback = Column(Text)
+    passed = Column(Boolean, default=False)  # quiz >= threshold AND explain_back_passed
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    module = relationship("LearningModule", back_populates="mastery_entries")
+
+
+class LeadershipRep(Base):
+    """A real leadership/presence rep — auto-pulled from Lead/Communication/
+    CalendarEvent records flagged as calls/pitches/negotiations, or manual."""
+    __tablename__ = "leadership_reps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_type = Column(String(40), default="manual")  # lead_call | pitch | negotiation | team_session | manual
+    source_record_id = Column(Integer, nullable=True)  # FK-ish to Lead/Communication/CalendarEvent
+    source_table = Column(String(40), nullable=True)  # which table source_record_id refers to
+    date = Column(DateTime, default=datetime.utcnow)
+    description = Column(Text)
+    ai_after_action_review = Column(Text)
+    user_reflection = Column(Text, nullable=True)
+    presence_score = Column(Float, nullable=True)  # 0-100, AI-estimated
+    avoided_moments = Column(Text, nullable=True)  # "where you shrank"
+    extra_data = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StreakLog(Base):
+    """Daily activity record — the don't-break-the-chain hook."""
+    __tablename__ = "streak_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(String(10), unique=True, nullable=False)  # YYYY-MM-DD
+    tracks_touched = Column(JSON, default=list)
+    total_minutes = Column(Integer, default=0)
+    chain_intact = Column(Boolean, default=True)
+    longest_streak_at_time = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DailySession(Base):
+    """The adaptive session container the Tutor AI assembles each day."""
+    __tablename__ = "daily_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(String(10), nullable=False, unique=True)  # YYYY-MM-DD — one session/day
+    modules_assigned = Column(JSON, default=list)  # list of module ids
+    session_payload = Column(JSON, default=dict)  # assembled concept/diagram/quiz/explain-back content
+    leadership_rep_review_included = Column(Boolean, default=False)
+    leadership_rep_id = Column(Integer, nullable=True)
+    actual_minutes_spent = Column(Integer, default=0)
+    energy_level_reported = Column(String(10), nullable=True)  # low | med | high
+    started = Column(Boolean, default=False)
+    completed = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RoadmapSnapshot(Base):
+    """Versioned copy of the roadmap so now/horizon plans can evolve
+    without losing history."""
+    __tablename__ = "roadmap_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version = Column(Integer, default=1)
+    full_roadmap_json = Column(JSON, default=dict)
+    change_note = Column(Text)
+    compass_note = Column(Text, nullable=True)  # long-term "private city / eventual nation" bearing
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SessionFeedback(Base):
+    """QA Layer 4 — one-tap thumbs up/down after a session/module."""
+    __tablename__ = "session_feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("daily_sessions.id"), nullable=True)
+    module_id = Column(Integer, nullable=True)
+    thumbs = Column(String(10), nullable=False)  # up | down
+    note = Column(Text, nullable=True)
+    triggered_regeneration = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ModuleQualityCheck(Base):
+    """QA Layer 2 — LLM-as-judge scores for a generated module's content."""
+    __tablename__ = "module_quality_checks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    module_id = Column(Integer, nullable=True)
+    generation_attempt = Column(Integer, default=1)
+    judge_scores = Column(JSON, default=dict)  # one score per rubric dimension
+    passed = Column(Boolean, default=True)
+    rejection_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Titan Track v2 — Duolingo-style scheduling, build-real-things projects,
+# negotiation simulations, and weekly/monthly progress tests.
+# ══════════════════════════════════════════════════════════════════════
+
+class LessonSchedulePreference(Base):
+    """The learner's preferred daily study slots (e.g. morning/afternoon/
+    evening). Effectively a singleton — the latest row wins."""
+    __tablename__ = "lesson_schedule_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slots = Column(JSON, default=list)  # [{"slot":"morning","time":"08:00","track_pref":"A"}, ...]
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ModuleProject(Base):
+    """A build-real-things project attached to a learning module. Unlocked once
+    the module's quiz is passed; graded by the Tutor AI against a rubric."""
+    __tablename__ = "module_projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    module_id = Column(Integer, ForeignKey("learning_modules.id"), nullable=False, unique=True)  # one project per module
+    brief = Column(JSON, default=dict)  # {title, description, steps[], starter_code, rubric, estimated_hours, submission_format}
+    completed_steps = Column(JSON, default=list)  # list of step indices the learner has checked off
+    submission_text = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    score = Column(Float, nullable=True)  # 0-100, AI-graded
+    ai_feedback = Column(JSON, default=dict)  # {strengths[], improvements[], per_rubric, summary}
+    status = Column(String(20), default="available")  # available | in_progress | submitted | graded
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NegotiationSession(Base):
+    """A live AI-counterpart negotiation / leadership simulation. The AI plays
+    the other side; the learner practices naming the ask and holding the line."""
+    __tablename__ = "negotiation_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    module_id = Column(Integer, ForeignKey("learning_modules.id"), nullable=True)
+    scenario = Column(JSON, default=dict)  # {role, counterpart, objective, stakes, opening}
+    rounds = Column(JSON, default=list)  # [{"role":"user"|"counterpart","text":"...","ts":"..."}]
+    outcome = Column(JSON, nullable=True)  # {score, analysis, what_worked[], what_cost_you[]}
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProgressTest(Base):
+    """A weekly or monthly multi-module review test. Questions carry an internal
+    answer key (stripped before serialization); grading reports per-track scores."""
+    __tablename__ = "progress_tests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    type = Column(String(20), nullable=False)  # weekly | monthly
+    period_start = Column(String(10))  # YYYY-MM-DD
+    period_end = Column(String(10))    # YYYY-MM-DD
+    questions = Column(JSON, default=list)  # [{question, options[], correct, explanation, module_id, track_code}]
+    answers = Column(JSON, nullable=True)  # list of chosen option indices
+    submitted_at = Column(DateTime, nullable=True)
+    score_overall = Column(Float, nullable=True)
+    scores_by_track = Column(JSON, nullable=True)  # {"A":82,"B":60,...}
+    created_at = Column(DateTime, default=datetime.utcnow)

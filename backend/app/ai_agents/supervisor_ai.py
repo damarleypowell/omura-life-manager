@@ -24,8 +24,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from google import genai
-from google.genai import types
+import anthropic
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, cast, String
 
@@ -497,14 +496,15 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
             "- health: analyze_sleep, score_energy, generate_supplement_plan\n"
             "- market: scan_competitors, identify_trends, find_opportunities\n"
             "- scenario: run_simulation, evaluate_decision\n"
-            "- automation: run_workflow, execute_outreach_sequence"
+            "- automation: run_workflow, execute_outreach_sequence\n"
+            "- tutor: get_daily_session, grade_module_attempt, run_explain_back_check, generate_leadership_rep_review, generate_module_content (Titan Track learning system)"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "agent": {
                     "type": "string",
-                    "enum": ["inbox", "crm", "content", "project", "finance", "health", "market", "scenario", "automation", "outreach"],
+                    "enum": ["inbox", "crm", "content", "project", "finance", "health", "market", "scenario", "automation", "outreach", "tutor"],
                     "description": "Which specialized agent to delegate to.",
                 },
                 "action": {
@@ -754,9 +754,12 @@ class SupervisorAI:
     """
 
     AGENT_NAME = "supervisor"
-    # Flash: 500 req/day free. Pro: only 25 req/day free — not practical for a chat supervisor.
-    # Swap to "gemini-2.5-pro" here once you have a paid tier.
-    MODEL = "gemini-2.0-flash"
+    # Claude (Anthropic) brain. Override via OMURA_SUPERVISOR_MODEL (e.g. point at
+    # a local OpenAI-compatible model later).
+    MODEL = settings.OMURA_SUPERVISOR_MODEL
+    # If the primary model is overloaded after retries, fall back to this fast
+    # model so a transient Anthropic 529 doesn't become a hard chat error.
+    FALLBACK_MODEL = settings.OMURA_WORKER_MODEL
     MAX_CONTEXT_MESSAGES = 20
     MAX_IMPORTED_CONTEXT_ITEMS = 15
     MAX_TOOL_ITERATIONS = 10
@@ -767,10 +770,7 @@ class SupervisorAI:
 
     def __init__(self, db: Session, event_callback=None) -> None:
         self.db = db
-        # Use Flash key for supervisor — 500 req/day free vs Pro's 25 req/day
-        # Switch to GEMINI_API_KEY (Pro) here once on a paid plan
-        api_key = settings.GEMINI_FLASH_KEY or settings.GEMINI_API_KEY
-        self.client = genai.Client(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self.logger = OmuraLogger("supervisor_ai")
         # Optional callback(event_type: str, data: dict) for real-time streaming
         self._emit = event_callback or (lambda etype, data: None)
@@ -801,23 +801,11 @@ class SupervisorAI:
             system_prompt = self._build_system_prompt()
 
             # Load conversation history and append current user message
-            contents = self._load_context()
-            contents.append(types.Content(
-                role="user",
-                parts=[types.Part(text=user_message)],
-            ))
+            messages = self._load_context()
+            messages.append({"role": "user", "content": user_message})
+            messages = self._ensure_message_alternation(messages)
 
-            # Build Gemini tool definitions from SUPERVISOR_TOOLS
-            gemini_tools = [types.Tool(function_declarations=[
-                types.FunctionDeclaration(
-                    name=t["name"],
-                    description=t["description"],
-                    parameters=t["input_schema"],
-                )
-                for t in SUPERVISOR_TOOLS
-            ])]
-
-            # Run the Gemini tool-use loop
+            # Run the Claude tool-use loop
             iteration = 0
             final_reply = ""
 
@@ -826,95 +814,95 @@ class SupervisorAI:
             while iteration < self.MAX_TOOL_ITERATIONS:
                 iteration += 1
                 self.logger.info(
-                    f"Gemini API call — iteration {iteration}, "
-                    f"contents: {len(contents)}"
+                    f"Claude API call — iteration {iteration}, messages: {len(messages)}"
                 )
                 if iteration > 1:
                     self._emit("thinking", {"message": "Processing results...", "iteration": iteration})
 
-                _retry_delays = [15, 30, 60]
+                _retry_delays = [5, 15, 30]
+                # Try the primary model with backoff; if it stays overloaded,
+                # fall back to the fast model so the chat still answers.
+                _models = [self.MODEL] + ([self.FALLBACK_MODEL] if self.FALLBACK_MODEL != self.MODEL else [])
                 response = None
-                for _attempt, _delay in enumerate([0] + _retry_delays):
-                    if _delay:
-                        self.logger.warning(f"Rate limited — retrying in {_delay}s")
-                        self._emit("thinking", {"message": f"Rate limited, retrying in {_delay}s...", "iteration": iteration})
-                        time.sleep(_delay)
-                    try:
-                        response = self.client.models.generate_content(
-                            model=self.MODEL,
-                            contents=contents,
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_prompt,
-                                tools=gemini_tools,
+                _last_exc = None
+                for _mi, _model in enumerate(_models):
+                    for _attempt, _delay in enumerate([0] + _retry_delays):
+                        if _delay:
+                            self.logger.warning(f"{_model} busy — retrying in {_delay}s")
+                            self._emit("thinking", {"message": f"Model busy, retrying in {_delay}s...", "iteration": iteration})
+                            time.sleep(_delay)
+                        try:
+                            response = self.client.messages.create(
+                                model=_model,
+                                max_tokens=2048,
                                 temperature=0.3,
-                                max_output_tokens=2048,
-                                # Disable thinking — cuts latency significantly on Flash
-                                thinking_config=types.ThinkingConfig(thinking_budget=0),
-                            ),
-                        )
+                                system=system_prompt,
+                                tools=SUPERVISOR_TOOLS,
+                                messages=messages,
+                            )
+                            if _mi > 0:
+                                self.logger.warning(f"Supervisor fell back to {_model}")
+                            break
+                        except Exception as _exc:
+                            _last_exc = _exc
+                            _msg = str(_exc).lower()
+                            _is_rate = any(k in _msg for k in ("429", "rate", "overloaded", "529", "quota"))
+                            if _is_rate and _attempt < len(_retry_delays):
+                                continue
+                            break  # try the fallback model (if any)
+                    if response is not None:
                         break
-                    except Exception as _exc:
-                        _msg = str(_exc).lower()
-                        _is_rate = any(k in _msg for k in ("429", "quota", "resource_exhausted", "rate"))
-                        if _is_rate and _attempt < len(_retry_delays):
-                            continue
-                        raise
                 if response is None:
-                    raise RuntimeError("Gemini API failed after retries")
+                    raise _last_exc or RuntimeError("Claude API failed after retries + fallback")
 
-                # Check if the response contains function calls
-                function_calls = response.function_calls or []
+                # Pull tool_use + text blocks out of the response content
+                tool_use_blocks = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
+                text_parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
 
-                if not function_calls:
-                    # Extract text safely — response.text can raise if blocked
-                    try:
-                        final_reply = response.text or ""
-                    except Exception:
-                        parts = response.candidates[0].content.parts if response.candidates else []
-                        final_reply = " ".join(p.text for p in parts if hasattr(p, "text") and p.text)
+                if response.stop_reason != "tool_use" or not tool_use_blocks:
+                    final_reply = "".join(text_parts).strip()
                     break
 
-                # Append the model's response (with function call parts) to history
-                contents.append(response.candidates[0].content)
+                # Echo the assistant turn (text + tool_use blocks) back verbatim
+                messages.append({"role": "assistant", "content": response.content})
 
-                # Execute each tool call and collect function responses
-                function_response_parts = []
-                for fc in function_calls:
+                # Execute each tool call and collect tool_result blocks
+                tool_result_blocks = []
+                for tb in tool_use_blocks:
+                    tool_input = dict(tb.input) if tb.input else {}
                     self.logger.info(
-                        f"Executing tool: {fc.name} "
-                        f"with args: {json.dumps(dict(fc.args), default=str)[:500]}"
+                        f"Executing tool: {tb.name} with args: {json.dumps(tool_input, default=str)[:500]}"
                     )
-                    tool_input = dict(fc.args)
                     self._emit("tool_start", {
-                        "tool": fc.name,
+                        "tool": tb.name,
                         "input": {k: v for k, v in tool_input.items() if k not in ("body", "html_body")},
                     })
 
-                    result = self._execute_single_tool(fc.name, tool_input)
-                    actions_taken.append({
-                        "tool": fc.name,
-                        "input": tool_input,
-                        "result": result,
-                    })
+                    # Egress backstop: strip _-prefixed internals from EVERY tool
+                    # result before it touches the LLM context, the persisted
+                    # actions_taken, or the client — so no answer key / hidden
+                    # field can leak regardless of which tool produced it.
+                    from backend.app.utils.serialization import strip_internal_keys
+                    result = strip_internal_keys(self._execute_single_tool(tb.name, tool_input))
+                    actions_taken.append({"tool": tb.name, "input": tool_input, "result": result})
 
                     self._emit("tool_done", {
-                        "tool": fc.name,
+                        "tool": tb.name,
                         "success": result.get("success", True) if isinstance(result, dict) else True,
-                        "summary": _summarize_tool_result(fc.name, result),
+                        "summary": _summarize_tool_result(tb.name, result),
                     })
 
-                    if fc.name == "request_internet":
+                    if tb.name == "request_internet":
                         internet_requested = True
 
-                    function_response_parts.append(
-                        types.Part.from_function_response(
-                            name=fc.name,
-                            response=result if isinstance(result, dict) else {"result": str(result)},
-                        )
-                    )
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tb.id,
+                        "content": json.dumps(result, default=str)[:20000],
+                    })
 
-                # Append function responses as a user message
-                contents.append(types.Content(role="user", parts=function_response_parts))
+                # Feed the tool results back as the next user turn
+                messages.append({"role": "user", "content": tool_result_blocks})
 
             else:
                 # Exceeded max iterations
@@ -970,10 +958,10 @@ class SupervisorAI:
         except Exception as exc:
             self.logger.error(f"Error in chat: {traceback.format_exc()}")
             msg = str(exc)
-            if "quota" in msg.lower() or "rate" in msg.lower() or "resource_exhausted" in msg.lower() or "429" in msg:
-                friendly = "Gemini daily quota exhausted (500 req/day on free tier). I've already retried — quota resets at midnight Pacific. Try again tomorrow or add a paid API key."
-            elif "api_key" in msg.lower() or "unauthorized" in msg.lower() or "invalid" in msg.lower():
-                friendly = "Invalid or missing Gemini API key. Check GEMINI_API_KEY in your .env."
+            if "rate" in msg.lower() or "overloaded" in msg.lower() or "429" in msg or "529" in msg:
+                friendly = "Claude is rate-limited or overloaded right now. I've already retried with backoff — give it a moment and try again."
+            elif "api_key" in msg.lower() or "authentication" in msg.lower() or "unauthorized" in msg.lower() or "invalid x-api-key" in msg.lower():
+                friendly = "Invalid or missing Anthropic API key. Check ANTHROPIC_API_KEY in your .env."
             elif "connect" in msg.lower() or "timeout" in msg.lower():
                 friendly = "I'm having trouble connecting to the AI. Check your network connection."
             else:
@@ -1011,6 +999,12 @@ You are the central brain of the Omura Life Manager platform. Your role is to pr
 - Personality: Highly competent, direct but warm, proactive, and strategic. You anticipate needs before they arise.
 - Communication style: Clear, concise, and action-oriented. Use bullet points for action items. Be conversational but efficient.
 
+## DAMARLEY — who you serve (you ALREADY know this; never ask for it)
+- His email: **damarleypowellbuisness@gmail.com**. When he says "email me", "send to me", "send me X", or "forward me…", send it there. NEVER ask "what's your email?" — you have it.
+- Outbound sending identities: `noreply@ironlogic.cc` (Resend, primary) and `ironlogic.business@gmail.com` (Gmail).
+- Ventures: **IronLogic** (AI automation / agent agency) and **Gotham Financial**. He trains boxing.
+- You know him deeply via IMPORTED CONTEXT below + the live system state. Do not interrogate him for things the system already holds (his email, his companies, his data). Infer, then act.
+
 ## TODAY
 {today}
 
@@ -1031,6 +1025,9 @@ You can directly manage:
 - **Marketing Campaigns**: Create and manage campaigns across platforms
 - **Metrics & KPIs**: Track business metrics, revenue, expenses, and performance data
 - **Health Tracking**: Log workouts, sleep, supplements, and nutrition
+- **Outreach**: Find leads, verify emails, research + draft personalized copy, queue/send sequences (run_outreach_pipeline, send_outreach_email, bulk_send_outreach)
+- **Email**: Send any email to anyone right now (send_email) — delivered via Resend
+- **Titan Track**: His daily research-grounded learning & leadership-development system — adaptive daily sessions, mastery quizzes + Socratic explain-back gating, auto-pulled leadership reps, streaks, and the tiered now/horizon roadmap. Drive it via the `tutor` agent.
 - **Search**: Query any data in the system
 
 You can delegate to specialized agents via the `run_agent` tool (on-demand only — they do NOT run in the background):
@@ -1043,6 +1040,7 @@ You can delegate to specialized agents via the `run_agent` tool (on-demand only 
 - **market**: scan_competitors, identify_trends, find_opportunities
 - **scenario**: run_simulation, evaluate_decision
 - **automation**: run_workflow, execute_outreach_sequence
+- **tutor** (Titan Track): get_daily_session, grade_module_attempt, run_explain_back_check, generate_leadership_rep_review, generate_module_content
 
 Use `run_agent` only when specialized analysis is genuinely needed — for routine CRUD and conversation, handle it directly with your own tools to conserve API credits.
 
@@ -1054,6 +1052,8 @@ You have 4 email tools. Use them:
 - `bulk_send_outreach`: Sends to ALL new leads with drafted copy.
 
 NEVER say "I cannot send emails". NEVER say "email isn't connected". NEVER tell Damarley to send it himself. You have the `send_email` tool. Use it immediately.
+
+"Send me N from the outreach batch" / "send me the drafts" → he wants to REVIEW the drafted outreach copy, sent to his own inbox (damarleypowellbuisness@gmail.com), NOT sent to the leads. Do this without asking: `search_records` for leads (their drafted copy lives in each lead's notes/extra_data), take N, then `send_email` to Damarley compiling those N drafts (lead name, company, subject, body) into one clear review email. Only send to the actual leads if he explicitly says "send to the leads" / "blast them".
 
 ## PRICING CALCULATOR (use whenever a prospect's numbers come up)
 IronLogic AI pricing formula:
@@ -1133,13 +1133,14 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
     # Context loading
     # ------------------------------------------------------------------
 
-    def _load_context(self) -> List[Any]:
-        """Load recent chat history as Gemini Content objects.
+    def _load_context(self) -> List[Dict[str, Any]]:
+        """Load recent chat history as Anthropic message dicts.
 
         Returns
         -------
         list
-            List of types.Content objects for the Gemini API.
+            List of {"role": "user"|"assistant", "content": str} dicts, with
+            empty-content turns skipped (Anthropic rejects empty text blocks).
         """
         try:
             recent_messages = (
@@ -1153,21 +1154,17 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             self.logger.warning(f"Failed to load chat history: {exc}")
             recent_messages = []
 
-        contents = []
+        messages: List[Dict[str, Any]] = []
         for msg in recent_messages:
-            role = msg.role
-            # Gemini uses "user" and "model" (not "assistant")
-            if role == "assistant":
-                role = "model"
-            if role not in ("user", "model"):
+            role = "assistant" if msg.role == "assistant" else ("user" if msg.role == "user" else None)
+            if role is None:
                 continue
-            contents.append(types.Content(
-                role=role,
-                parts=[types.Part(text=msg.content or "")],
-            ))
+            content = (msg.content or "").strip()
+            if not content:
+                continue
+            messages.append({"role": role, "content": content})
 
-        contents = self._ensure_message_alternation(contents)
-        return contents
+        return self._ensure_message_alternation(messages)
 
     def _load_imported_context(self) -> str:
         """Load imported context from ChatGPT exports and other sources.
@@ -1841,6 +1838,7 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             "scenario": "backend.app.ai_agents.scenario_ai.ScenarioAI",
             "automation": "backend.app.ai_agents.automation_ai.AutomationAI",
             "outreach": "backend.app.ai_agents.outreach_ai.OutreachAI",
+            "tutor": "backend.app.ai_agents.tutor_agent.TutorAI",
         }
 
         if agent_name not in AGENT_MAP:
@@ -1858,7 +1856,13 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
                 return {"success": False, "error": f"Unknown action '{action}' for agent '{agent_name}'"}
 
             self.logger.info(f"Supervisor delegating to {agent_name}.{action}", params=agent_params)
-            result = method(**agent_params)
+            # Strip agent internals (e.g. tutor's _quiz_key answer key, a
+            # negotiation's _counterpart_position) before the result is fed to
+            # the LLM context, persisted in chat history, or returned to the
+            # client. The action enum is not runtime-enforced, so ANY public
+            # agent method is reachable here — this is the egress gate.
+            from backend.app.utils.serialization import strip_internal_keys
+            result = strip_internal_keys(method(**agent_params))
             crud.log_agent_action(self.db, agent_name, action, agent_params, result if isinstance(result, dict) else {"result": str(result)}, "success")
             return {"success": True, "agent": agent_name, "action": action, "result": result}
         except Exception as exc:
@@ -2328,15 +2332,16 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
 
     @staticmethod
     def _ensure_message_alternation(contents: List[Any]) -> List[Any]:
-        """Ensure Gemini Content objects strictly alternate between user and model.
+        """Ensure messages strictly alternate user/assistant, starting with user.
 
-        Gemini requires strict user/model alternation. Consecutive same-role
-        entries are collapsed by keeping the last one.
+        Anthropic requires the first message to be from the user and roles to
+        alternate. Consecutive same-role entries are collapsed by keeping the
+        last one.
 
         Parameters
         ----------
         contents : list
-            List of types.Content objects.
+            List of {"role", "content"} message dicts.
 
         Returns
         -------
@@ -2356,7 +2361,7 @@ Frame it as ROI, not cost. "You'd need to book 3 extra appointments to cover the
             else:
                 cleaned.append(item)
 
-        # Gemini requires the first message to be from the user
+        # Anthropic requires the first message to be from the user
         while cleaned and _role(cleaned[0]) != "user":
             cleaned = cleaned[1:]
 

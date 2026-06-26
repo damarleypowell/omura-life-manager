@@ -11,6 +11,17 @@ import AutomationControl from '../components/Dashboard/AutomationControl';
 import ScenarioSimulator from '../components/Dashboard/ScenarioSimulator';
 import HealthDashboard from '../components/Dashboard/HealthDashboard';
 import OutreachPipeline from '../components/Dashboard/OutreachPipeline';
+import TitanTrack from '../components/Dashboard/TitanTrack';
+import AgentInsights from '../components/Shared/AgentInsights';
+
+// Which insights section to show under each tab (agent results land here, in English).
+const INSIGHTS_SECTION = {
+  business:      'business',
+  communication: 'communication',
+  content:       'content',
+  health:        'health',
+  scenarios:     'scenarios',
+};
 
 const SECTION_TITLES = {
   chat:          'AI Chat',
@@ -23,6 +34,7 @@ const SECTION_TITLES = {
   automation:    'Automation Control',
   scenarios:     'Scenario Simulator',
   health:        'Health & Fitness',
+  titan:         'Titan Track',
 };
 
 const SECTION_COMPONENTS = {
@@ -36,6 +48,7 @@ const SECTION_COMPONENTS = {
   automation:    AutomationControl,
   scenarios:     ScenarioSimulator,
   health:        HealthDashboard,
+  titan:         TitanTrack,
 };
 
 export default function Dashboard() {
@@ -56,8 +69,11 @@ export default function Dashboard() {
             onNavigate={setActiveSection}
           />
 
-          <main className="flex-1 p-6">
+          <main className="flex-1 p-6 space-y-6">
             {ActiveComponent && <ActiveComponent />}
+            {INSIGHTS_SECTION[activeSection] && (
+              <AgentInsights section={INSIGHTS_SECTION[activeSection]} />
+            )}
           </main>
         </div>
       </div>

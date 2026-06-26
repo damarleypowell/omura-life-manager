@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { FiCpu, FiPlay, FiRefreshCw, FiActivity, FiCheckCircle, FiXCircle, FiClock } from 'react-icons/fi';
 import { ai } from '../../services/apiService';
 import { notifySuccess, notifyError } from '../Shared/Notifications';
+import AgentInsights from '../Shared/AgentInsights';
 
 const AGENTS = [
   {
@@ -51,7 +52,7 @@ const AGENTS = [
   {
     id: 'automation', name: 'Automation AI', color: 'text-orange-400',
     description: 'Execute repetitive tasks automatically',
-    action: 'run_workflow', params: { workflow: 'business_metrics', params: {} },
+    action: 'run_workflow', params: { workflow_name: 'business_metrics', params: {} },
   },
 ];
 
@@ -61,6 +62,22 @@ const WORKFLOWS = [
   { id: 'health_optimization', name: 'Health Optimization', description: 'Data → Analyze → Adjust → Energy Score' },
   { id: 'business_metrics',  name: 'Business Metrics',  description: 'Revenue → KPIs → Alerts → Optimizations' },
 ];
+
+// Renders a run result as a plain-English brief (the backend returns `summary`).
+function ResultView({ result }) {
+  if (!result) return null;
+  const summary = (typeof result === 'object' && result.summary)
+    ? result.summary
+    : (typeof result === 'string' ? result : '');
+  if (!summary) {
+    return <p className="text-[11px] text-emerald-400/80 mt-2">✓ Done</p>;
+  }
+  return (
+    <div className="mt-2 rounded-lg bg-black/30 border border-white/[0.08] p-2.5">
+      <p className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">{summary}</p>
+    </div>
+  );
+}
 
 function AgentCard({ agent, onRun }) {
   const [status, setStatus] = useState('idle');
@@ -100,11 +117,6 @@ function AgentCard({ agent, onRun }) {
         </div>
       </div>
       <p className="text-xs text-slate-400 mb-3">{agent.description}</p>
-      {lastResult && status === 'success' && (
-        <p className="text-[11px] text-emerald-400/80 mb-2 truncate">
-          ✓ Completed
-        </p>
-      )}
       <button
         onClick={handleRun}
         className="btn btn-ghost text-xs w-full justify-center"
@@ -115,6 +127,10 @@ function AgentCard({ agent, onRun }) {
           : <><FiPlay size={13} /> Run Agent</>
         }
       </button>
+      {status === 'error' && (
+        <p className="text-[11px] text-red-400 mt-2">✗ Failed — check the activity log.</p>
+      )}
+      {lastResult && <ResultView result={lastResult} />}
     </div>
   );
 }
@@ -123,6 +139,7 @@ export default function AutomationControl() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [runningWorkflow, setRunningWorkflow] = useState(null);
+  const [workflowResults, setWorkflowResults] = useState({});
   const [lastRefresh, setLastRefresh] = useState(null);
 
   useEffect(() => {
@@ -154,7 +171,8 @@ export default function AutomationControl() {
   async function handleRunWorkflow(workflowId) {
     setRunningWorkflow(workflowId);
     try {
-      await ai.runWorkflow(workflowId, {});
+      const res = await ai.runWorkflow(workflowId, {});
+      setWorkflowResults((prev) => ({ ...prev, [workflowId]: res }));
       await loadLogs();
       notifySuccess(`Workflow "${workflowId}" completed`);
     } catch {
@@ -219,25 +237,31 @@ export default function AutomationControl() {
         </h3>
         <div className="grid grid-cols-2 gap-4">
           {WORKFLOWS.map((wf) => (
-            <div key={wf.id} className="glass-inner flex items-center gap-4 p-4 hover:bg-white/[0.06] transition-all">
-              <div className="flex-1">
-                <p className="text-sm font-medium text-white">{wf.name}</p>
-                <p className="text-xs text-slate-400 mt-1">{wf.description}</p>
+            <div key={wf.id} className="glass-inner p-4 hover:bg-white/[0.06] transition-all">
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-white">{wf.name}</p>
+                  <p className="text-xs text-slate-400 mt-1">{wf.description}</p>
+                </div>
+                <button
+                  onClick={() => handleRunWorkflow(wf.id)}
+                  disabled={runningWorkflow === wf.id}
+                  className="btn btn-primary text-xs"
+                >
+                  {runningWorkflow === wf.id
+                    ? <><FiRefreshCw size={13} className="animate-spin" /> Running</>
+                    : <><FiPlay size={13} /> Run</>
+                  }
+                </button>
               </div>
-              <button
-                onClick={() => handleRunWorkflow(wf.id)}
-                disabled={runningWorkflow === wf.id}
-                className="btn btn-primary text-xs"
-              >
-                {runningWorkflow === wf.id
-                  ? <><FiRefreshCw size={13} className="animate-spin" /> Running</>
-                  : <><FiPlay size={13} /> Run</>
-                }
-              </button>
+              {workflowResults[wf.id] && <ResultView result={workflowResults[wf.id]} />}
             </div>
           ))}
         </div>
       </div>
+
+      {/* Plain-English results from every agent run */}
+      <AgentInsights title="Latest AI results (plain English)" limit={8} />
 
       {/* Logs */}
       <div className="glass-card">

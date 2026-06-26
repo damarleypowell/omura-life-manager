@@ -158,6 +158,13 @@ export const ai = {
 };
 
 // ══════════════════════════════════════
+// AI Insights (plain-English agent results, per section)
+// ══════════════════════════════════════
+export const insights = {
+  list: (section, limit = 8) => api.get('/api/insights', { params: { section, limit } }),
+};
+
+// ══════════════════════════════════════
 // Email Sending
 // ══════════════════════════════════════
 export const email = {
@@ -205,6 +212,78 @@ export const drive = {
   folders: () => api.get('/api/drive/folders'),
   leadDocs: (leadName) => api.get(`/api/drive/lead/${encodeURIComponent(leadName)}/documents`),
   backup: () => api.post('/api/drive/backup'),
+};
+
+// ══════════════════════════════════════
+// Titan Track — daily learning / leadership development
+// ══════════════════════════════════════
+export const titan = {
+  // Dashboard
+  getDashboard: () => api.get('/api/dashboard/titan-track'),
+  // Tracks & modules
+  getTracks: () => api.get('/api/titan/tracks'),
+  getModules: (params) => api.get('/api/titan/modules', { params }),
+  getModule: (id) => api.get(`/api/titan/modules/${id}`),
+  updateModule: (id, data) => api.patch(`/api/titan/modules/${id}`, data),
+  // Mastery & gating
+  attempt: (id, answers) => api.post(`/api/titan/modules/${id}/attempt`, { answers }),
+  explainBack: (id, transcript, priorAttempts = 0) =>
+    api.post(`/api/titan/modules/${id}/explain-back`, { transcript, prior_attempts: priorAttempts }),
+  masteryHistory: (id) => api.get(`/api/titan/modules/${id}/mastery-history`),
+  // Leadership reps
+  getReps: (days = 30) => api.get('/api/titan/reps', { params: { days } }),
+  getRep: (id) => api.get(`/api/titan/reps/${id}`),
+  reflect: (id, reflection, avoidedMoments) =>
+    api.post(`/api/titan/reps/${id}/reflect`, { reflection, avoided_moments: avoidedMoments }),
+  syncReps: () => api.post('/api/titan/reps/sync'),
+  // Daily session
+  getTodaySession: (energyLevel) =>
+    api.get('/api/titan/session/today', { params: { energy_level: energyLevel } }),
+  startSession: (id, energyLevel) =>
+    api.post(`/api/titan/session/${id}/start`, { energy_level: energyLevel }),
+  completeSession: (id, minutesSpent = 0) =>
+    api.post(`/api/titan/session/${id}/complete`, { minutes_spent: minutesSpent }),
+  feedback: (id, moduleId, thumbs, note) =>
+    api.post(`/api/titan/session/${id}/feedback`, { module_id: moduleId, thumbs, note }),
+  // Streak
+  getStreak: () => api.get('/api/titan/streak'),
+  checkin: (moduleId, minutes = 0) =>
+    api.post('/api/titan/streak/checkin', { module_id: moduleId, minutes }),
+  // Roadmap
+  getRoadmap: () => api.get('/api/titan/roadmap'),
+  saveSnapshot: (changeNote, compassNote) =>
+    api.post('/api/titan/roadmap/snapshot', { change_note: changeNote, compass_note: compassNote }),
+  roadmapHistory: () => api.get('/api/titan/roadmap/history'),
+  // Lesson (full Robert-Greene-style content for one module)
+  getLesson: (moduleId) => api.get(`/api/titan/modules/${moduleId}/lesson`),
+  // Opt-in: ask the AI to re-author this lesson (near-term modules only)
+  refreshLesson: (moduleId) => api.post(`/api/titan/modules/${moduleId}/refresh`),
+  // Schedule preferences
+  getSchedulePreferences: () => api.get('/api/titan/schedule/preferences'),
+  updateSchedulePreferences: (slots) => api.put('/api/titan/schedule/preferences', { slots }),
+  // Projects (build real things)
+  getProjects: () => api.get('/api/titan/projects'),
+  // POST: first call lazily creates the module's project row (a write).
+  getModuleProject: (moduleId) => api.post(`/api/titan/modules/${moduleId}/project`),
+  getProject: (id) => api.get(`/api/titan/projects/${id}`),
+  updateProjectProgress: (id, completedSteps) =>
+    api.put(`/api/titan/projects/${id}/progress`, { completed_steps: completedSteps }),
+  submitProject: (id, submissionText) =>
+    api.post(`/api/titan/projects/${id}/submit`, { submission_text: submissionText }),
+  getProjectFeedback: (id) => api.get(`/api/titan/projects/${id}/feedback`),
+  // Negotiation / leadership simulation
+  startNegotiation: (moduleId, scenarioType) =>
+    api.post('/api/titan/negotiation/start', { module_id: moduleId, scenario_type: scenarioType }),
+  negotiationRespond: (id, message) =>
+    api.post(`/api/titan/negotiation/${id}/respond`, { message }),
+  finishNegotiation: (id) => api.post(`/api/titan/negotiation/${id}/finish`),
+  getNegotiation: (id) => api.get(`/api/titan/negotiation/${id}`),
+  // Progress tests (weekly / monthly)
+  getUpcomingTest: () => api.get('/api/titan/tests/upcoming'),
+  generateTest: (type = 'weekly') => api.post('/api/titan/tests/generate', { type }),
+  getTest: (id) => api.get(`/api/titan/tests/${id}`),
+  submitTest: (id, answers) => api.post(`/api/titan/tests/${id}/submit`, { answers }),
+  getTestHistory: () => api.get('/api/titan/tests/history'),
 };
 
 // ══════════════════════════════════════

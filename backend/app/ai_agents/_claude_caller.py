@@ -1,8 +1,9 @@
 """
 Shared AI caller for all Omura worker agents.
 
-Primary: Anthropic Claude Haiku (fast, high rate limits).
-Fallback: Google Gemini Flash (if Anthropic unavailable/rate-limited).
+Claude only (Anthropic). Gemini has been fully removed. The model defaults to
+Haiku for worker agents and is overridable via settings.OMURA_WORKER_MODEL or a
+per-call ``model`` argument (the Tutor uses Sonnet).
 """
 
 from __future__ import annotations
@@ -18,87 +19,66 @@ from backend.app.utils.logging import OmuraLogger
 
 _logger = OmuraLogger("ai_caller")
 
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
-GEMINI_MODEL = "gemini-2.0-flash"
+ANTHROPIC_MODEL = settings.OMURA_WORKER_MODEL
 
-# Lazy-initialized clients
+# Lazy-initialized client
 _anthropic_client = None
-_gemini_client = None
 
 
 def _get_anthropic():
     global _anthropic_client
     if _anthropic_client is None and settings.ANTHROPIC_API_KEY:
         import anthropic
-        _anthropic_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        # Explicit bounded per-request timeout so a hung edge can't stall a
+        # synchronous FastAPI request. max_retries=0 — this module owns the
+        # retry/fallback policy (the [0,15,45]s loop across models below), so we
+        # don't want the SDK silently stacking its own retries on top.
+        _anthropic_client = anthropic.Anthropic(
+            api_key=settings.ANTHROPIC_API_KEY,
+            timeout=90.0,
+            max_retries=0,
+        )
     return _anthropic_client
-
-
-def _get_gemini():
-    global _gemini_client
-    if _gemini_client is None:
-        api_key = settings.GEMINI_FLASH_KEY or settings.GEMINI_API_KEY
-        if api_key:
-            from google import genai
-            _gemini_client = genai.Client(api_key=api_key)
-    return _gemini_client
 
 
 def _is_rate_limit(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return any(k in msg for k in ("429", "quota", "resource_exhausted", "rate_limit", "rate limit", "overloaded"))
+    return any(k in msg for k in ("429", "quota", "resource_exhausted", "rate_limit", "rate limit", "overloaded", "529"))
 
 
-def _call_anthropic(prompt: str, system_prompt: str, agent_name: str, temperature: float, max_tokens: int) -> Optional[str]:
+def _call_anthropic(prompt: str, system_prompt: str, agent_name: str, temperature: float, max_tokens: int, model: Optional[str] = None) -> Optional[str]:
     client = _get_anthropic()
     if not client:
         return None
-    for attempt, delay in enumerate([0, 20, 60]):
-        if delay:
-            _logger.warning(f"[{agent_name}] Anthropic rate limited — retrying in {delay}s")
-            time.sleep(delay)
-        try:
-            response = client.messages.create(
-                model=ANTHROPIC_MODEL,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.content[0].text
-        except Exception as exc:
-            if _is_rate_limit(exc) and attempt < 2:
-                continue
-            _logger.error(f"[{agent_name}] Anthropic error: {exc}")
-            return None
+    use_model = model or ANTHROPIC_MODEL
+    # Try the requested model; if it keeps failing/overloading and it isn't the
+    # fast default, fall back to the default model so a hiccup ≠ a hard error.
+    models_to_try = [use_model]
+    if use_model != ANTHROPIC_MODEL:
+        models_to_try.append(ANTHROPIC_MODEL)
 
-
-def _call_gemini(prompt: str, system_prompt: str, agent_name: str, temperature: float, max_tokens: int) -> Optional[str]:
-    client = _get_gemini()
-    if not client:
-        return None
-    from google.genai import types
-    for attempt, delay in enumerate([0, 20, 60]):
-        if delay:
-            _logger.warning(f"[{agent_name}] Gemini rate limited — retrying in {delay}s")
-            time.sleep(delay)
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
+    for mi, m in enumerate(models_to_try):
+        for attempt, delay in enumerate([0, 15, 45]):
+            if delay:
+                _logger.warning(f"[{agent_name}] {m} busy — retrying in {delay}s")
+                time.sleep(delay)
+            try:
+                response = client.messages.create(
+                    model=m,
+                    max_tokens=max_tokens,
                     temperature=temperature,
-                    max_output_tokens=max_tokens,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            return response.text or ""
-        except Exception as exc:
-            if _is_rate_limit(exc) and attempt < 2:
-                continue
-            _logger.error(f"[{agent_name}] Gemini error: {exc}")
-            return None
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                if mi > 0:
+                    _logger.warning(f"[{agent_name}] fell back to {m}")
+                return response.content[0].text
+            except Exception as exc:
+                if _is_rate_limit(exc) and attempt < 2:
+                    continue
+                _logger.error(f"[{agent_name}] Anthropic error on {m}: {exc}")
+                break  # give up on this model, try the fallback (if any)
+    return None
 
 
 def call_claude(
@@ -107,17 +87,18 @@ def call_claude(
     agent_name: str = "agent",
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    model: Optional[str] = None,
 ) -> Optional[str]:
-    """Call AI and return raw text. Tries Anthropic first, falls back to Gemini."""
-    result = _call_anthropic(prompt, system_prompt, agent_name, temperature, max_tokens)
-    if result is not None:
-        _logger.debug(f"[{agent_name}] Anthropic call successful ({len(result)} chars)")
-        return result
+    """Call Claude and return raw text (None if unavailable after retries).
 
-    _logger.warning(f"[{agent_name}] Anthropic unavailable — falling back to Gemini")
-    result = _call_gemini(prompt, system_prompt, agent_name, temperature, max_tokens)
+    ``model`` optionally overrides the default worker model (Haiku) for a single
+    call — e.g. the Tutor uses Sonnet for richer lesson generation.
+    """
+    result = _call_anthropic(prompt, system_prompt, agent_name, temperature, max_tokens, model)
     if result is not None:
-        _logger.debug(f"[{agent_name}] Gemini fallback successful ({len(result)} chars)")
+        _logger.debug(f"[{agent_name}] Claude call successful ({len(result)} chars)")
+    else:
+        _logger.warning(f"[{agent_name}] Claude call returned no result")
     return result
 
 
@@ -127,14 +108,17 @@ def call_claude_json(
     agent_name: str = "agent",
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    model: Optional[str] = None,
 ) -> Optional[dict]:
-    """Call AI and parse response as JSON."""
+    """Call AI and parse response as JSON. ``model`` optionally overrides the
+    default Anthropic model for this call."""
     raw = call_claude(
         prompt=prompt,
         system_prompt=system_prompt,
         agent_name=agent_name,
         temperature=temperature,
         max_tokens=max_tokens,
+        model=model,
     )
     if raw is None:
         return None

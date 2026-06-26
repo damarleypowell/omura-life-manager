@@ -2,12 +2,13 @@ import React from 'react';
 import {
   FiMessageCircle, FiTarget, FiBriefcase, FiMessageSquare,
   FiHome, FiEdit3, FiBook, FiCpu, FiTrendingUp, FiActivity,
-  FiSettings, FiLogOut,
+  FiAward, FiSettings, FiLogOut,
 } from 'react-icons/fi';
 import { logout } from '../../services/authService';
 
 const NAV_ITEMS = [
   { id: 'chat',          label: 'AI Chat',             icon: FiMessageCircle },
+  { id: 'titan',         label: 'Titan Track',         icon: FiAward },
   { id: 'outreach',      label: 'Outreach',            icon: FiTarget },
   { id: 'business',      label: 'Business',            icon: FiBriefcase },
   { id: 'communication', label: 'Inbox',               icon: FiMessageSquare },

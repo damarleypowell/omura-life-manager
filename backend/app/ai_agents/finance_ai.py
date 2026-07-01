@@ -378,7 +378,14 @@ class FinanceAI:
             self.logger.debug(f"Claude API returned valid response for task={task}")
             return result
 
-        # ── Fallback: mock responses keyed by task ──
+        # AI unavailable (Claude outage after retries) — return an honest marker
+        # instead of fabricated figures. Public methods read this with .get(...)
+        # and degrade to zeros/empties, so no invented data is ever shown as real.
+        self.logger.warning("AI unavailable — returning ai_unavailable for task=%s", task)
+        return {"status": "ai_unavailable",
+                "error": "The AI is temporarily unavailable; no figures could be generated."}
+
+        # ── Legacy placeholder responses below are unreachable (kept for shape ref) ──
         self.logger.info("Falling back to mock response for task=%s", task)
 
         if task == "calculate_kpis":

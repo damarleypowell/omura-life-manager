@@ -666,6 +666,133 @@ DEFAULT_TEMPLATE = {
 }
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 30-day follow-up sequence (research-grounded)
+# Best practices (2026 B2B cold outreach):
+#   • 5–8 touches over ~30 days; start tight, then widen the gaps.
+#   • The "50% rule": ≤50% of touches are email — the rest are non-inbox
+#     (LinkedIn / call) to protect domain reputation and look human.
+#   • Every touch adds a NEW angle/value; no lazy "just bumping".
+#   • Send Tue–Thu, ~10am–1pm in the prospect's local time.
+#   • Break-up email at day 30, then stop (more emails trigger spam reports).
+# Email touches auto-send; LinkedIn/call touches become a Task for Damarley.
+# Placeholders: {name} (first name), {company}.
+# ══════════════════════════════════════════════════════════════════════
+FOLLOWUP_SEQUENCE = [
+    {
+        "day": 0, "channel": "email", "purpose": "Opener — specific pain + soft CTA",
+        "subject": "Quick idea for {company}",
+        "body": (
+            "Hey {name},\n\n"
+            "Most businesses like {company} quietly lose deals because follow-up is too slow — "
+            "inquiries go cold before anyone replies.\n\n"
+            "I build AI that responds to every lead instantly, qualifies it, and books the meeting "
+            "automatically. Worth a 2-minute look?\n\n"
+            "Damarley"
+        ),
+    },
+    {
+        "day": 2, "channel": "linkedin", "purpose": "Connect + light engagement",
+        "script": (
+            "Send a LinkedIn connection request to {name} with the note:\n"
+            "\"Hi {name} — I help teams like {company} stop losing leads to slow follow-up "
+            "(instant AI response + auto-booking). Thought it'd be worth connecting.\"\n"
+            "Then like or thoughtfully comment on one recent post."
+        ),
+    },
+    {
+        "day": 4, "channel": "email", "purpose": "New angle — quantify the leak",
+        "subject": "Re: Quick idea for {company}",
+        "body": (
+            "Hey {name},\n\n"
+            "Following up with a number: leads contacted within 5 minutes are far more likely to "
+            "convert than ones that wait even 30. Most teams still do it by hand and lose the gap.\n\n"
+            "That gap is exactly what I close for businesses like {company}. Open to seeing how it'd work?\n\n"
+            "Damarley"
+        ),
+    },
+    {
+        "day": 8, "channel": "call", "purpose": "Call + voicemail",
+        "script": (
+            "Call {name} ({company}), Tue–Thu ~10am–12pm their time.\n"
+            "Voicemail: \"Hi {name}, it's Damarley — I sent a couple notes about helping {company} "
+            "respond to leads instantly and book more meetings. Didn't want it buried. I'll follow up "
+            "by email, or reach me at [your number]. Thanks.\""
+        ),
+    },
+    {
+        "day": 13, "channel": "email", "purpose": "Value-add — risk-free proof",
+        "subject": "Re: Quick idea for {company}",
+        "body": (
+            "Hey {name},\n\n"
+            "Not trying to crowd your inbox — I just think there's real revenue sitting in {company}'s "
+            "missed follow-ups.\n\n"
+            "Here's the no-risk version: I run it as a 14-day pilot tied to booked appointments. If it "
+            "doesn't book meetings, you don't continue.\n\n"
+            "Want a 90-second Loom showing exactly how it'd work for {company}?\n\n"
+            "Damarley"
+        ),
+    },
+    {
+        "day": 19, "channel": "linkedin", "purpose": "LinkedIn DM referencing the emails",
+        "script": (
+            "DM {name} on LinkedIn:\n"
+            "\"Hey {name} — circling back here since email might be buried. I mapped out how instant "
+            "AI follow-up would work for {company} specifically. Want me to send the 90-second version?\""
+        ),
+    },
+    {
+        "day": 25, "channel": "call", "purpose": "Second call + voicemail",
+        "script": (
+            "Second call to {name} ({company}), Tue–Thu late morning.\n"
+            "Voicemail: \"Hi {name}, Damarley again — last attempt by phone. If lead follow-up is on "
+            "your radar this quarter, I'd love 10 minutes. Otherwise I'll close it out. Thanks.\""
+        ),
+    },
+    {
+        "day": 30, "channel": "email", "purpose": "Break-up — permission to close",
+        "subject": "Closing the file on {company}",
+        "body": (
+            "Hey {name},\n\n"
+            "This is my last note — I'll close this out so I'm not cluttering your inbox.\n\n"
+            "If speeding up lead follow-up ever becomes a priority for {company}, just reply and I'll "
+            "pick it right back up. Either way, wishing you a strong quarter.\n\n"
+            "Damarley"
+        ),
+    },
+]
+
+
+def get_followup_touch(day: int) -> dict | None:
+    """Return the sequence touch scheduled for a given day (or None)."""
+    for touch in FOLLOWUP_SEQUENCE:
+        if touch["day"] == day:
+            return touch
+    return None
+
+
+def fill_followup(touch: dict, lead) -> dict:
+    """Fill {name}/{company} placeholders for a specific lead (ORM object or dict)."""
+    def _get(attr, default):
+        if isinstance(lead, dict):
+            return lead.get(attr) or default
+        return getattr(lead, attr, None) or default
+
+    raw_name = _get("name", "there")
+    name = raw_name.split()[0] if raw_name else "there"
+    company = _get("company", "your business")
+
+    def f(s: str) -> str:
+        return (s or "").replace("{name}", name).replace("{company}", company).replace("{clinic}", company)
+
+    return {
+        **touch,
+        "subject": f(touch.get("subject", "")),
+        "body": f(touch.get("body", "")),
+        "script": f(touch.get("script", "")),
+    }
+
+
 REPLY_SCRIPTS = {
     "what_is_this": (
         "It's a simple system that helps businesses recover missed inquiries and automatically "

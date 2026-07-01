@@ -187,21 +187,31 @@ class ContentAI:
         )
         result = self._call_ai(prompt, context={"task": "schedule_post"})
 
+        # Persist the schedule for real — don't claim 'scheduled' if nothing saved.
+        persisted = False
+        try:
+            from backend.app.database.models import ContentItem
+            item = self.db.query(ContentItem).filter(ContentItem.id == content_id).first()
+            if item:
+                item.scheduled_at = scheduled_at
+                self.db.commit()
+                persisted = True
+        except Exception as exc:
+            self.db.rollback()
+            self.logger.warning("Failed to persist schedule", content_id=content_id, error=str(exc))
+
         schedule_info = {
             "content_id": content_id,
             "scheduled_at": scheduled_at.isoformat(),
-            "status": "scheduled",
+            "status": "scheduled" if persisted else "not_found",
+            "persisted": persisted,
             "optimal_time_suggestion": result.get("optimal_time"),
         }
 
-        # Placeholder: persist to DB
-        # self.db.query(Content).filter_by(id=content_id).update({"scheduled_at": scheduled_at})
-        # self.db.commit()
-
         self.logger.info(
-            "Post scheduled",
+            "Post schedule processed",
             content_id=content_id,
-            status="scheduled",
+            status=schedule_info["status"],
             suggestion=schedule_info["optimal_time_suggestion"],
         )
         return schedule_info
@@ -222,8 +232,18 @@ class ContentAI:
         """
         self.logger.info("Analyzing content performance", content_id=content_id)
 
-        # Placeholder: fetch actual metrics from DB / platform APIs
         metrics = self._fetch_content_metrics(content_id)
+        # Don't ask the AI to invent insights about metrics that don't exist.
+        if not metrics.get("available"):
+            return {
+                "content_id": content_id,
+                "metrics": metrics,
+                "engagement_rate": 0.0,
+                "insights": [],
+                "recommendations": [],
+                "status": "no_metrics",
+                "message": metrics.get("note", "No engagement metrics recorded for this content yet."),
+            }
 
         prompt = (
             f"Analyze the performance of content ID {content_id}.\n"
@@ -294,31 +314,25 @@ class ContentAI:
         return normalized
 
     def _fetch_content_metrics(self, content_id: int) -> dict:
-        """Fetch engagement metrics from DB or platform APIs.
+        """Read the real stored engagement metrics for a content item.
 
-        Returns mock metrics until integrations are wired up.
+        Returns zeros with ``available: False`` when nothing has been recorded
+        yet (no social integration writes metrics today) — never fabricated
+        numbers, so analyze_performance can't present fake data as real.
         """
+        empty = {"likes": 0, "comments": 0, "shares": 0, "saves": 0, "reach": 0, "impressions": 0}
         try:
-            # Placeholder: actual DB / API query
-            self.logger.debug("Fetching metrics", content_id=content_id)
-            return {
-                "likes": 342,
-                "comments": 28,
-                "shares": 15,
-                "saves": 47,
-                "reach": 4820,
-                "impressions": 6140,
-            }
+            from backend.app.database.models import ContentItem
+            item = self.db.query(ContentItem).filter(ContentItem.id == content_id).first()
+            if not item:
+                return {**empty, "available": False, "note": "Content not found."}
+            recorded = item.engagement_metrics or {}
+            if not recorded:
+                return {**empty, "available": False, "note": "No metrics recorded yet for this content."}
+            return {**empty, **recorded, "available": True}
         except Exception as exc:
-            self.logger.warning(
-                "Failed to fetch metrics, returning defaults",
-                content_id=content_id,
-                error=str(exc),
-            )
-            return {
-                "likes": 0, "comments": 0, "shares": 0,
-                "saves": 0, "reach": 0, "impressions": 0,
-            }
+            self.logger.warning("Failed to fetch metrics", content_id=content_id, error=str(exc))
+            return {**empty, "available": False}
 
     def _call_ai(self, prompt: str, context: Optional[dict] = None) -> dict:
         """Call Claude API to process a prompt, with mock fallback.

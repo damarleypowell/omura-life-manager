@@ -58,11 +58,11 @@ function ProjectRow({ project }) {
         <div className="h-2 bg-white/5 rounded-full overflow-hidden">
           <div
             className="h-2 rounded-full gradient-blue-purple transition-all duration-700 ease-out"
-            style={{ width: `${project.progress || 0}%` }}
+            style={{ width: `${project.progress_pct || 0}%` }}
           />
         </div>
         <p className="text-[11px] text-slate-500 mt-1.5 text-right font-medium">
-          {project.progress || 0}%
+          {Math.round(project.progress_pct || 0)}%
         </p>
       </div>
       <span className={`badge ${statusColors[project.status] || 'badge-info'}`}>
@@ -101,9 +101,11 @@ export default function BusinessCommand() {
   async function handleFollowUp(lead) {
     setFollowingUp(lead.id);
     try {
-      await leadsApi.update(lead.id, { status: 'follow_up', next_followup: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString() });
+      // Schedule a follow-up date only. (There is no 'follow_up' LeadStatus —
+      // sending one 500s; valid statuses are new/contacted/qualified/proposal/won/lost/invalid.)
+      await leadsApi.update(lead.id, { next_followup: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString() });
       await loadData();
-    } catch { /* silently handled */ } finally { setFollowingUp(null); }
+    } catch (e) { console.error('Failed to schedule follow-up:', e); } finally { setFollowingUp(null); }
   }
 
   async function handleAddProject() {

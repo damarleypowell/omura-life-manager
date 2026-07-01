@@ -40,11 +40,12 @@ class Settings(BaseSettings):
 
     YOUTUBE_API_KEY: Optional[str] = None
 
-    # ── AI Provider Keys ──
+    # ── AI Provider Keys (Claude only — Gemini removed) ──
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
-    GEMINI_API_KEY: Optional[str] = None      # Pro — supervisor/brain
-    GEMINI_FLASH_KEY: Optional[str] = None   # Flash — worker agents
+    # Optional model overrides (swap to a local OpenAI-compatible server later).
+    OMURA_SUPERVISOR_MODEL: str = "claude-sonnet-4-6"
+    OMURA_WORKER_MODEL: str = "claude-haiku-4-5-20251001"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # ── External Services ──
@@ -68,7 +69,9 @@ class Settings(BaseSettings):
     # ── Auth ──
     JWT_SECRET: str = "change-me-in-production"
 
-    # ── Email (SendGrid + Gmail SMTP) ──
+    # ── Email (Resend primary; Gmail API/SMTP fallback) ──
+    RESEND_API_KEY: Optional[str] = None
+    RESEND_FROM: Optional[str] = None  # must be a Resend-verified sender/domain
     SENDGRID_API_KEY: Optional[str] = None
     DEFAULT_FROM_EMAIL: str = "noreply@omura.app"
     GMAIL_USER: Optional[str] = None

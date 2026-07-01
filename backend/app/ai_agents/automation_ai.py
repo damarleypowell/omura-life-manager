@@ -83,11 +83,20 @@ class AutomationAI:
         else:
             enhanced_body = task["body"]
 
-        # In production: integrate with email service (SendGrid, SES, etc.)
+        # Actually send via the shared sender (Gmail SMTP → Resend → Gmail API).
+        # Report the true outcome — never claim 'sent' for an email that wasn't.
+        from backend.app.email_utils import send_via_sendgrid
+        try:
+            send_via_sendgrid(recipient, task["subject"], enhanced_body)
+            status, error = "sent", None
+        except Exception as exc:
+            status, error = "failed", str(exc)
+
         result = {
             "task_id": task_id,
             "task_type": "email",
-            "status": "sent",
+            "status": status,
+            "error": error,
             "delivery": {
                 "to": recipient,
                 "subject": task["subject"],
@@ -98,11 +107,7 @@ class AutomationAI:
             "executed_at": datetime.utcnow().isoformat(),
         }
 
-        self.logger.info(
-            "Email task executed successfully",
-            task_id=task_id,
-            status="sent",
-        )
+        self.logger.info("Email task executed", task_id=task_id, status=status)
         return result
 
     def execute_posting_task(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -142,45 +147,24 @@ class AutomationAI:
 
         # Determine all target platforms
         platforms = [platform] + task.get("cross_post", [])
-        platform_results: list[dict[str, Any]] = []
 
-        for p in platforms:
-            # In production: call platform-specific API (Instagram Graph, TikTok, etc.)
-            platform_results.append({
-                "platform": p,
-                "status": "published",
-                "post_id": f"{p}_{uuid4().hex[:8]}",
-                "url": f"https://{p}.com/post/{uuid4().hex[:8]}",
-            })
-
-        # Generate engagement prediction
-        prompt = (
-            f"Predict engagement for {task.get('content_type', 'post')} "
-            f"on {platform}: '{task.get('content_body', '')[:200]}'"
-        )
-        ai_response = self._call_ai(prompt, context=task)
-
+        # No social-publishing integration is connected yet — report honestly
+        # instead of fabricating 'published' statuses, post IDs, and URLs.
         result = {
             "task_id": task_id,
             "task_type": "posting",
-            "status": "completed",
-            "platforms_posted": platform_results,
+            "status": "not_implemented",
+            "message": "Social publishing isn't connected yet — nothing was posted.",
+            "target_platforms": platforms,
             "content_preview": task.get("content_body", "")[:200],
-            "hashtags_used": task.get("hashtags", []),
-            "engagement_prediction": ai_response.get("engagement_prediction", {
-                "estimated_reach": 2500,
-                "estimated_likes": 180,
-                "estimated_comments": 24,
-                "estimated_shares": 12,
-                "confidence": 0.65,
-            }),
+            "hashtags": task.get("hashtags", []),
             "executed_at": datetime.utcnow().isoformat(),
         }
 
         self.logger.info(
-            "Posting task executed successfully",
+            "Posting task not executed (no social integration)",
             task_id=task_id,
-            platforms=len(platform_results),
+            platforms=len(platforms),
         )
         return result
 
@@ -225,22 +209,33 @@ class AutomationAI:
             f"Best regards"
         ))
 
+        # Send for real on the email channel; other channels aren't wired yet.
+        from backend.app.email_utils import send_via_sendgrid
+        contact_email = task.get("contact_email")
+        if channel == "email" and contact_email:
+            try:
+                send_via_sendgrid(contact_email,
+                                  task.get("subject") or f"Following up, {contact_name}",
+                                  message_body)
+                status, error = "sent", None
+            except Exception as exc:
+                status, error = "failed", str(exc)
+        else:
+            status = "not_implemented"
+            error = f"{channel} follow-ups aren't connected yet — nothing was sent."
+
         result = {
             "task_id": task_id,
             "task_type": "followup",
-            "status": "sent",
+            "status": status,
+            "error": error,
             "delivery": {
                 "contact_id": task.get("contact_id"),
                 "contact_name": contact_name,
-                "contact_email": task.get("contact_email"),
+                "contact_email": contact_email,
                 "channel": channel,
                 "follow_up_type": task.get("follow_up_type", "general"),
                 "message_preview": message_body[:300],
-            },
-            "crm_updates": {
-                "last_contact_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                "interaction_count_incremented": True,
-                "stage_updated": False,
             },
             "next_follow_up": ai_response.get("next_follow_up", {
                 "suggested_date": "3 days from now",
@@ -251,12 +246,7 @@ class AutomationAI:
             "executed_at": datetime.utcnow().isoformat(),
         }
 
-        self.logger.info(
-            "Follow-up task executed successfully",
-            task_id=task_id,
-            contact=contact_name,
-            channel=channel,
-        )
+        self.logger.info("Follow-up task executed", task_id=task_id, contact=contact_name, status=status)
         return result
 
     def execute_update_task(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -285,51 +275,28 @@ class AutomationAI:
             data_type=data_type,
         )
 
-        # In production: call platform APIs and perform actual data sync
-        records_fetched = 47  # Mock
-        records_updated = 42
-        records_created = 3
-        conflicts = 2
-
+        # No cross-platform sync integration is connected yet — do not fabricate
+        # record counts or conflicts.
         result = {
             "task_id": task_id,
             "task_type": "update",
-            "status": "completed",
+            "status": "not_implemented",
+            "message": "Cross-platform data sync isn't connected yet — no records were changed.",
             "sync_summary": {
                 "source": source,
                 "target": target,
                 "data_type": data_type,
-                "records_fetched": records_fetched,
-                "records_updated": records_updated,
-                "records_created": records_created,
-                "records_skipped": records_fetched - records_updated - records_created,
-                "conflicts_detected": conflicts,
+                "records_fetched": 0,
+                "records_updated": 0,
+                "records_created": 0,
+                "records_skipped": 0,
+                "conflicts_detected": 0,
             },
-            "conflicts": [
-                {
-                    "record_id": "rec_a1b2c3",
-                    "field": "email",
-                    "source_value": "john@newdomain.com",
-                    "target_value": "john@olddomain.com",
-                    "resolution": "pending_review",
-                },
-                {
-                    "record_id": "rec_d4e5f6",
-                    "field": "phone",
-                    "source_value": "+1-555-0199",
-                    "target_value": "+1-555-0100",
-                    "resolution": "pending_review",
-                },
-            ][:conflicts],
+            "conflicts": [],
             "executed_at": datetime.utcnow().isoformat(),
         }
 
-        self.logger.info(
-            "Update task executed successfully",
-            task_id=task_id,
-            records_updated=records_updated,
-            conflicts=conflicts,
-        )
+        self.logger.info("Update task not executed (no sync integration)", task_id=task_id)
         return result
 
     # ── Task Management Methods ─────────────────────────────────────
@@ -609,12 +576,7 @@ class AutomationAI:
             "result": {
                 "lead_score": lead_score,
                 "lead_tier": lead_tier,
-                "scoring_factors": {
-                    "intent_strength": 0.85,
-                    "budget_signals": 0.70,
-                    "urgency": 0.75,
-                    "company_fit": 0.80,
-                },
+                "scoring_factors": ai_score.get("scoring_factors", {}),
                 "recommended_priority": "high" if lead_tier == "hot" else "medium",
             },
         })
@@ -644,21 +606,39 @@ class AutomationAI:
             },
         })
 
-        # Step 4: Update dashboard
+        # Step 4: Persist the lead for real (idempotent on email), then report
+        # only what actually happened — no fabricated lead_id.
+        from backend.app.database import models as _m
+        lead_added = False
+        lead_id = None
+        try:
+            existing = (
+                self.db.query(_m.Lead).filter(_m.Lead.email == sender).first()
+                if sender else None
+            )
+            if existing:
+                lead = existing
+            else:
+                lead = _m.Lead(name=sender_name, email=sender, status=_m.LeadStatus.NEW,
+                               score=float(lead_score or 0), source="inbound_email")
+                self.db.add(lead)
+                lead_added = True
+            self.db.commit()
+            self.db.refresh(lead)
+            lead_id = lead.id
+        except Exception as exc:
+            self.db.rollback()
+            self.logger.warning("Lead persist failed", error=str(exc))
+
         steps.append({
             "step": 4,
-            "name": "update_dashboard",
+            "name": "update_crm",
             "agent": "automation_ai",
-            "status": "completed",
+            "status": "completed" if lead_id is not None else "failed",
             "result": {
-                "crm_updated": True,
-                "lead_added": True,
-                "lead_id": f"lead_{uuid4().hex[:8]}",
-                "dashboard_widgets_refreshed": [
-                    "lead_pipeline",
-                    "recent_activity",
-                    "conversion_funnel",
-                ],
+                "crm_updated": lead_id is not None,
+                "lead_added": lead_added,
+                "lead_id": lead_id,
             },
         })
 
@@ -754,21 +734,17 @@ class AutomationAI:
             },
         })
 
-        # Step 4: Update metrics dashboard
+        # Step 4: Summarize — this workflow drafts + predicts only; it does not
+        # persist a calendar entry or publish (no integration wired). Report honestly.
         steps.append({
             "step": 4,
-            "name": "update_metrics",
+            "name": "summary",
             "agent": "automation_ai",
             "status": "completed",
             "result": {
-                "content_calendar_updated": True,
-                "metrics_dashboard_refreshed": True,
-                "widgets_updated": [
-                    "content_calendar",
-                    "engagement_forecast",
-                    "posting_schedule",
-                ],
-                "content_id": f"content_{uuid4().hex[:8]}",
+                "content_calendar_updated": False,
+                "published": False,
+                "note": "Drafted and forecast only — publishing/calendar persistence isn't connected yet.",
             },
         })
 

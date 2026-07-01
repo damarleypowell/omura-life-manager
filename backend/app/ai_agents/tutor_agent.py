@@ -570,11 +570,11 @@ class TutorAI:
             f"Format: {module.format}.{ff}\n\n"
             f"Produce JSON with EXACTLY these keys:\n"
             '{\n'
-            '  "big_picture": "1 short paragraph (<= 70 words): what this is and why it matters to an ambitious founder — the hook",\n'
-            '  "concept": "2-3 tight paragraphs (<= 160 words total) in plain language, grounded in the citation",\n'
-            '  "historical_example": {"figure": "one specific real person", "era": "<= 6 words",\n'
-            '     "story": "a concrete 60-110 word story of what they actually did", "key_lesson": "<= 25 words pulling out the principle"},\n'
-            '  "modern_practice": "1 paragraph (<= 90 words): exactly what applying this looks like for the learner TODAY (agency/finance/leadership)",\n'
+            '  "big_picture": "1 short paragraph (<= 55 words): what this is and why it matters to an ambitious founder — the hook",\n'
+            '  "concept": "2-3 SHORT paragraphs (<= 110 words total), separated by a blank line, plain language grounded in the citation",\n'
+            '  "historical_example": {"figure": "one specific real, well-known person (so a portrait exists)", "era": "<= 6 words",\n'
+            '     "story": "a concrete 50-85 word story of what they actually did", "key_lesson": "<= 22 words pulling out the principle"},\n'
+            '  "modern_practice": "1 paragraph (<= 70 words): exactly what applying this looks like for the learner TODAY (agency/finance/leadership)",\n'
             '  "diagram": {"type": "flow|comparison|cycle", "title": "<= 8 words",\n'
             '     "nodes": ["step 1","step 2",...]   // 3-5 short items, for flow/cycle\n'
             '     OR "columns": [{"label":"A","points":["..."]},{"label":"B","points":["..."]}] // for comparison },\n'
@@ -593,7 +593,8 @@ class TutorAI:
             '  },\n'
             '  "citation": "the specific source(s) this rests on"\n'
             '}\n'
-            "RULES: The historical example must be a real, nameable person doing a specific thing — not a vague archetype. "
+            "RULES: Write tight — short, concrete sentences, no filler or throat-clearing; respect every word cap above. "
+            "The historical example must be a real, famous, nameable person (one with a known portrait) doing a specific thing — not a vague archetype. "
             "Quiz questions must test the learning objective, not trivia; each needs 3-4 plausible options (<= 15 words each). "
             "The project must produce a REAL artifact (working code, a written analysis, a tracked log, a recording, or a simulation), "
             "sized to its estimated_hours. For Track C presence/negotiation modules prefer submission_format 'negotiation_sim' or 'recording'. "

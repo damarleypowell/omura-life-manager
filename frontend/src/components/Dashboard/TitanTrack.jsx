@@ -18,16 +18,87 @@ import {
   FiZap, FiStar, FiAward, FiLock, FiCheck, FiCheckCircle, FiPlay, FiArrowRight,
   FiArrowLeft, FiX, FiTarget, FiRefreshCw, FiBookOpen, FiClock, FiSettings,
   FiChevronRight, FiList, FiTrendingUp, FiEdit3, FiSend, FiMessageCircle,
+  FiVolume2, FiSquare,
 } from 'react-icons/fi';
 import { titan } from '../../services/apiService';
+import { TONES, mute } from './titanTheme';
+import { useSpeech } from './useSpeech';
+
+// ── Listen / Stop control: reads text aloud (Edge voice → browser fallback) ──
+function NarrateButton({ text, speech, label = 'Listen', style }) {
+  const clean = (text || '').trim();
+  if (!speech?.supported || !clean) return null;
+  const active = speech.speaking;
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost"
+      style={{ padding: '4px 10px', fontSize: 11, gap: 5, ...style }}
+      onClick={() => (active ? speech.stop() : speech.speak(clean))}
+      aria-label={active ? 'Stop narration' : 'Listen to this'}
+    >
+      {active ? <><FiSquare size={11} /> Stop</> : <><FiVolume2 size={12} /> {label}</>}
+    </button>
+  );
+}
+
+// Real photo/painting of a named historical figure, pulled from Wikipedia
+// (free, no key). Falls back to a calm initials badge if there's no image.
+const _portraitCache = new Map();
+function FigurePortrait({ name, size = 72 }) {
+  const [src, setSrc] = useState(() => (_portraitCache.has(name) ? _portraitCache.get(name) : undefined));
+  useEffect(() => {
+    if (!name || src !== undefined) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(name)}`,
+          { headers: { Accept: 'application/json' } }
+        );
+        if (!r.ok) throw new Error('no page');
+        const j = await r.json();
+        const url = j?.thumbnail?.source || j?.originalimage?.source || null;
+        _portraitCache.set(name, url);
+        if (alive) setSrc(url);
+      } catch {
+        _portraitCache.set(name, null);
+        if (alive) setSrc(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [name, src]);
+
+  const initials = (name || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  const box = {
+    width: size, height: size, borderRadius: 12, flexShrink: 0,
+    border: `1px solid ${TONES.line}`, overflow: 'hidden',
+    background: '#0D0D0F', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  };
+  if (src) {
+    return (
+      <div style={box}>
+        <img src={src} alt={name} loading="lazy"
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      </div>
+    );
+  }
+  // unknown (null) or still-loading (undefined) → initials placeholder
+  return (
+    <div style={{ ...box, color: TONES.textDim, fontSize: size * 0.32, fontWeight: 800,
+      background: 'linear-gradient(145deg, #16161A, #0D0D0F)' }}>
+      {src === undefined ? '' : initials}
+    </div>
+  );
+}
 
 // ── Levels (XP thresholds) ──
 const LEVELS = [
-  { name: 'Apprentice', min: 0,    color: '#9CA3AF' },
-  { name: 'Analyst',    min: 150,  color: '#60A5FA' },
-  { name: 'Strategist', min: 400,  color: '#A78BFA' },
-  { name: 'Architect',  min: 800,  color: '#34D399' },
-  { name: 'Sovereign',  min: 1500, color: '#FBBF24' },
+  { name: 'Apprentice', min: 0,    color: TONES.textDim },
+  { name: 'Analyst',    min: 150,  color: TONES.ready },
+  { name: 'Strategist', min: 400,  color: TONES.violet },
+  { name: 'Architect',  min: 800,  color: TONES.mastered },
+  { name: 'Sovereign',  min: 1500, color: TONES.progress },
 ];
 
 function levelFor(xp) {
@@ -43,9 +114,9 @@ function levelFor(xp) {
 }
 
 const STATUS_META = {
-  mastered:    { color: '#34D399', icon: '✓', label: 'Mastered' },
-  in_progress: { color: '#FBBF24', icon: '◐', label: 'In progress' },
-  available:   { color: '#60A5FA', icon: '○', label: 'Ready' },
+  mastered:    { color: TONES.mastered, icon: '✓', label: 'Mastered' },
+  in_progress: { color: TONES.progress, icon: '◐', label: 'In progress' },
+  available:   { color: TONES.ready, icon: '○', label: 'Ready' },
   locked:      { color: '#3F3F46', icon: '🔒', label: 'Locked' },
 };
 
@@ -55,20 +126,25 @@ const SLOT_ICON = { morning: '🌅', afternoon: '☀️', evening: '🌙' };
 // Shared bits
 // ════════════════════════════════════════════════════════════════
 
-function Diagram({ diagram }) {
+// Diagrams build in step-by-step (staggered reveal) instead of dumping a static
+// box — a small motion cue that helps the shape land. `accent` tints it to the
+// lesson's track color. Honors prefers-reduced-motion via CSS.
+function Diagram({ diagram, accent = TONES.ready }) {
   if (!diagram) return null;
   const { type, title, nodes, columns } = diagram;
+  const RISE = 0.12; // seconds between each element appearing
+
   if (type === 'comparison' && Array.isArray(columns)) {
     return (
       <div className="glass-inner" style={{ padding: 14 }}>
-        {title && <p style={{ fontSize: 12, color: '#A1A1AA', marginBottom: 10, fontWeight: 600 }}>{title}</p>}
+        {title && <p style={{ fontSize: 12, color: TONES.textDim, marginBottom: 10, fontWeight: 600 }}>{title}</p>}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
           {columns.map((col, i) => (
-            <div key={i} style={{ background: '#0D0D0F', border: '1px solid #1E1E24', borderRadius: 10, padding: 12 }}>
+            <div key={i} className="titan-rise" style={{ animationDelay: `${i * RISE}s`, background: '#0D0D0F', border: '1px solid #1E1E24', borderTop: `2px solid ${accent}`, borderRadius: 10, padding: 12 }}>
               <p style={{ fontSize: 12, fontWeight: 700, color: '#FAFAFA', marginBottom: 6 }}>{col.label}</p>
               <ul style={{ margin: 0, paddingLeft: 16 }}>
                 {(col.points || []).map((p, j) => (
-                  <li key={j} style={{ fontSize: 12, color: '#A1A1AA', marginBottom: 4, lineHeight: 1.5 }}>{p}</li>
+                  <li key={j} style={{ fontSize: 12, color: TONES.textDim, marginBottom: 4, lineHeight: 1.5 }}>{p}</li>
                 ))}
               </ul>
             </div>
@@ -81,15 +157,15 @@ function Diagram({ diagram }) {
   if (!list.length) return null;
   return (
     <div className="glass-inner" style={{ padding: 14 }}>
-      {title && <p style={{ fontSize: 12, color: '#A1A1AA', marginBottom: 10, fontWeight: 600 }}>{title}</p>}
+      {title && <p style={{ fontSize: 12, color: TONES.textDim, marginBottom: 10, fontWeight: 600 }}>{title}</p>}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
         {list.map((n, i) => (
           <React.Fragment key={i}>
-            <div style={{ background: '#0D0D0F', border: '1px solid #2A2A33', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#E4E4E7', fontWeight: 500 }}>{n}</div>
-            {i < list.length - 1 && <FiArrowRight size={14} style={{ color: '#52525B', flexShrink: 0 }} />}
+            <div className="titan-rise" style={{ animationDelay: `${i * 2 * RISE}s`, background: '#0D0D0F', border: '1px solid #2A2A33', borderLeft: `3px solid ${accent}`, borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#E4E4E7', fontWeight: 500 }}>{n}</div>
+            {i < list.length - 1 && <FiArrowRight className="titan-rise" size={14} style={{ animationDelay: `${(i * 2 + 1) * RISE}s`, color: TONES.textFaint, flexShrink: 0 }} />}
           </React.Fragment>
         ))}
-        {type === 'cycle' && list.length > 1 && <span style={{ fontSize: 11, color: '#52525B' }}>↺ repeats</span>}
+        {type === 'cycle' && list.length > 1 && <span style={{ fontSize: 11, color: TONES.textFaint }}>↺ repeats</span>}
       </div>
     </div>
   );
@@ -97,8 +173,8 @@ function Diagram({ diagram }) {
 
 function ConfidenceTag({ level }) {
   const map = {
-    strong: ['STRONG', '#34D399'], moderate: ['MODERATE', '#60A5FA'],
-    contested: ['CONTESTED', '#FBBF24'], theoretical: ['THEORETICAL', '#A78BFA'],
+    strong: ['STRONG', TONES.mastered], moderate: ['MODERATE', TONES.ready],
+    contested: ['CONTESTED', TONES.progress], theoretical: ['THEORETICAL', TONES.violet],
   };
   const [label, color] = map[level] || map.moderate;
   return (
@@ -135,7 +211,7 @@ function StatHeader({ streak, xp, onOpenSchedule }) {
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <FiStar size={26} style={{ color: '#FBBF24' }} />
+        <FiStar size={26} style={{ color: TONES.progress }} />
         <div>
           <div style={{ fontSize: 30, fontWeight: 800, color: '#FAFAFA', lineHeight: 1 }}>{xp}</div>
           <div style={{ fontSize: 11, color: '#71717A' }}>XP earned</div>
@@ -163,7 +239,7 @@ function StatHeader({ streak, xp, onOpenSchedule }) {
 function LessonCard({ card, onOpen }) {
   const m = card.module;
   const locked = !m || m.status === 'locked';
-  const color = m?.color_theme || '#3B82F6';
+  const color = mute(m?.color_theme || TONES.ready);
   return (
     <button
       type="button"
@@ -206,7 +282,7 @@ function TrackProgressCard({ track, modules, onOpen }) {
     () => modules.filter((m) => m.track_id === track.id).sort((a, b) => a.order_index - b.order_index),
     [modules, track.id]
   );
-  const color = track.color_theme || '#3B82F6';
+  const color = mute(track.color_theme || TONES.ready);
   const pct = Math.round((track.mastered_count / Math.max(track.module_count, 1)) * 100);
   const current = mods.find((m) => m.status === 'in_progress') || mods.find((m) => m.status === 'available');
   const next = current ? mods.find((m) => m.order_index > current.order_index && m.status !== 'mastered') : null;
@@ -226,7 +302,7 @@ function TrackProgressCard({ track, modules, onOpen }) {
         <div style={{ fontSize: 11, color: '#71717A', marginTop: 5 }}>{pct}% mastered</div>
       </div>
       {allDone ? (
-        <div style={{ fontSize: 13, color: '#34D399', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+        <div style={{ fontSize: 13, color: TONES.mastered, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
           <FiCheckCircle size={14} /> Track complete
         </div>
       ) : current ? (
@@ -258,12 +334,12 @@ function Heatmap({ streak }) {
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   const activeDays = cells.filter((c) => c.active).length;
   const shade = (c) => {
-    if (!c.active) return '#161619';
+    if (!c.active) return TONES.heat[0];
     const m = c.minutes || 0;
-    if (m >= 45) return '#39D353';
-    if (m >= 20) return '#26A641';
-    if (m > 0) return '#006D32';
-    return '#0E4429';
+    if (m >= 45) return TONES.heat[4];
+    if (m >= 20) return TONES.heat[3];
+    if (m > 0) return TONES.heat[2];
+    return TONES.heat[1];
   };
   return (
     <div className="glass-card">
@@ -286,7 +362,7 @@ function Heatmap({ streak }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 10, fontSize: 11, color: '#71717A' }}>
         <span>Less</span>
-        {['#161619', '#0E4429', '#006D32', '#26A641', '#39D353'].map((cc) => (
+        {TONES.heat.map((cc) => (
           <span key={cc} style={{ width: 11, height: 11, borderRadius: 3, background: cc }} />
         ))}
         <span>More</span>
@@ -300,7 +376,7 @@ function ProjectMiniCard({ project, onOpen }) {
   const steps = brief.steps || [];
   const done = (project.completed_steps || []).length;
   const pct = steps.length ? Math.round((done / steps.length) * 100) : (project.status === 'graded' ? 100 : 0);
-  const color = project.color_theme || '#3B82F6';
+  const color = mute(project.color_theme || TONES.ready);
   return (
     <button type="button" onClick={() => onOpen(project)} className="glass-inner"
       style={{ textAlign: 'left', padding: 14, borderRadius: 12, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
@@ -308,7 +384,7 @@ function ProjectMiniCard({ project, onOpen }) {
         <span style={{ fontSize: 16 }}>{brief.submission_format === 'negotiation_sim' ? '🎤' : '🔨'}</span>
         <span style={{ fontSize: 14, fontWeight: 700, color: '#FAFAFA' }}>{brief.title || project.module_title}</span>
         {project.status === 'graded' && (
-          <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: (project.score || 0) >= 80 ? '#34D399' : '#FBBF24' }}>{project.score}%</span>
+          <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: (project.score || 0) >= 80 ? TONES.mastered : TONES.progress }}>{project.score}%</span>
         )}
       </div>
       <div style={{ fontSize: 11, color: '#71717A' }}>{project.track_name}</div>
@@ -326,7 +402,7 @@ function TestBanner({ upcoming, onStart, busy }) {
   const due = info.due;
   return (
     <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', borderColor: due ? 'rgba(251,191,36,0.35)' : '#27272A' }}>
-      <FiTrendingUp size={22} style={{ color: due ? '#FBBF24' : '#60A5FA' }} />
+      <FiTrendingUp size={22} style={{ color: due ? TONES.progress : TONES.ready }} />
       <div style={{ flex: 1, minWidth: 180 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#FAFAFA', textTransform: 'capitalize' }}>{next} review test</div>
         <div style={{ fontSize: 12, color: '#A1A1AA' }}>
@@ -366,6 +442,7 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   const [mastered, setMastered] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const finishedRef = useRef(false);
+  const speech = useSpeech();
 
   useEffect(() => {
     let alive = true;
@@ -381,6 +458,9 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
     })();
     return () => { alive = false; };
   }, [moduleId]);
+
+  // Don't let narration bleed across steps — stop it whenever the step changes.
+  useEffect(() => { speech.stop(); }, [step, speech.stop]);
 
   const c = data?.content || {};
   const module = data?.module || {};
@@ -453,7 +533,7 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   }
   if (error && !data) {
     return <Overlay onClose={onClose}><div className="glass-card" style={{ textAlign: 'center', padding: 30 }}>
-      <p style={{ color: '#F87171', marginBottom: 12 }}>{error}</p>
+      <p style={{ color: TONES.danger, marginBottom: 12 }}>{error}</p>
       <button className="btn btn-ghost" onClick={onClose}>Close</button>
     </div></Overlay>;
   }
@@ -462,13 +542,24 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   const pct = Math.round(((step + 1) / steps.length) * 100);
   const canAdvance = cur.key === 'quiz' ? quizPassed : true;
 
+  // What the Listen button reads for the current step (the prose steps only).
+  const he = c.historical_example;
+  const stepText = {
+    big_picture: c.big_picture,
+    concept: c.concept,
+    history: he ? `${he.figure}. ${he.story}${he.key_lesson ? ` The lesson: ${he.key_lesson}` : ''}` : '',
+    modern: c.modern_practice,
+    exercises: (c.exercises || []).map((e, i) => `${i + 1}. ${e.task}`).join(' '),
+    explain: c.explain_back_prompt,
+  }[cur.key] || '';
+
   return (
     <Overlay onClose={onClose}>
       <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
         {/* header + progress */}
         <div style={{ padding: '16px 20px', borderBottom: '1px solid #1E1E24' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-            <FiBookOpen style={{ color: '#60A5FA' }} />
+            <FiBookOpen style={{ color: TONES.ready }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: '#FAFAFA' }}>{module.title}</span>
             <ConfidenceTag level={module.confidence_level} />
             {['available', 'in_progress'].includes(module.status) && (
@@ -482,33 +573,42 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
               onClick={onClose} aria-label="Close lesson"><FiX size={16} /></button>
           </div>
           <div style={{ height: 6, background: '#1A1A1F', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ width: `${pct}%`, height: '100%', background: '#60A5FA', transition: 'width .35s' }} />
+            <div style={{ width: `${pct}%`, height: '100%', background: TONES.ready, transition: 'width .35s' }} />
           </div>
           <div style={{ fontSize: 11, color: '#71717A', marginTop: 6 }}>{cur.label} · {step + 1}/{steps.length}</div>
         </div>
 
         {/* body */}
         <div style={{ padding: '20px 24px', minHeight: 260 }}>
+          <div key={step} className="titan-step">
+          {stepText && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+              <NarrateButton text={stepText} speech={speech} />
+            </div>
+          )}
           {cur.key === 'big_picture' && (
             <Section title="Why this matters">
-              <p style={pStyle}>{c.big_picture}</p>
+              <Segmented text={c.big_picture} />
             </Section>
           )}
           {cur.key === 'concept' && (
             <Section title="The concept">
-              <p style={{ ...pStyle, whiteSpace: 'pre-wrap' }}>{c.concept}</p>
+              <Segmented text={c.concept} />
             </Section>
           )}
           {cur.key === 'history' && c.historical_example && (
             <Section title="Through history">
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 17, fontWeight: 800, color: '#FAFAFA' }}>{c.historical_example.figure}</span>
-                <span style={{ fontSize: 12, color: '#71717A' }}>{c.historical_example.era}</span>
+              <div style={{ display: 'flex', gap: 14, marginBottom: 12, alignItems: 'flex-start' }}>
+                <FigurePortrait name={c.historical_example.figure} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#FAFAFA', lineHeight: 1.2 }}>{c.historical_example.figure}</div>
+                  <div style={{ fontSize: 12, color: TONES.textFaint, marginTop: 2 }}>{c.historical_example.era}</div>
+                </div>
               </div>
-              <p style={pStyle}>{c.historical_example.story}</p>
+              <Segmented text={c.historical_example.story} />
               {c.historical_example.key_lesson && (
-                <div className="glass-inner" style={{ padding: 12, marginTop: 12, borderLeft: '3px solid #A78BFA' }}>
-                  <span style={{ fontSize: 11, color: '#A78BFA', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>The lesson</span>
+                <div className="glass-inner" style={{ padding: 12, marginTop: 12, borderLeft: `3px solid ${TONES.violet}` }}>
+                  <span style={{ fontSize: 11, color: TONES.violet, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>The lesson</span>
                   <p style={{ ...pStyle, marginTop: 4 }}>{c.historical_example.key_lesson}</p>
                 </div>
               )}
@@ -516,7 +616,7 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
           )}
           {cur.key === 'modern' && (
             <Section title="In your world today">
-              <p style={pStyle}>{c.modern_practice}</p>
+              <Segmented text={c.modern_practice} />
             </Section>
           )}
           {cur.key === 'diagram' && (
@@ -527,7 +627,7 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {(c.exercises || []).map((ex, i) => (
                   <div key={i} className="glass-inner" style={{ padding: 12, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                    <span style={{ fontSize: 13, fontWeight: 800, color: '#60A5FA' }}>{i + 1}</span>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: TONES.ready }}>{i + 1}</span>
                     <span style={{ ...pStyle, flex: 1 }}>{ex.task}</span>
                     <span style={{ fontSize: 11, color: '#71717A', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}><FiClock size={11} />{ex.minutes}m</span>
                   </div>
@@ -544,7 +644,7 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
                 </button>
               ) : (
                 <div className="glass-inner" style={{ marginTop: 14, padding: 12 }}>
-                  <p style={{ fontSize: 14, fontWeight: 700, color: quizResult.passed_quiz ? '#34D399' : '#FBBF24' }}>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: quizResult.passed_quiz ? TONES.mastered : TONES.progress }}>
                     {quizResult.score}% — {quizResult.passed_quiz ? 'Passed! 🎉' : `Need ${quizResult.threshold}%`}
                   </p>
                   <p style={{ fontSize: 12, color: '#A1A1AA', marginTop: 4 }}>{quizResult.feedback}</p>
@@ -562,8 +662,8 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
               {!quizPassed ? (
                 <p style={pStyle}>Pass the quiz first to unlock this step.</p>
               ) : mastered ? (
-                <div className="glass-inner" style={{ padding: 14, borderLeft: '3px solid #34D399' }}>
-                  <p style={{ fontSize: 14, fontWeight: 700, color: '#34D399' }}>✓ Mastered — you proved it in your own words.</p>
+                <div className="glass-inner" style={{ padding: 14, borderLeft: `3px solid ${TONES.mastered}` }}>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: TONES.mastered }}>✓ Mastered — you proved it in your own words.</p>
                 </div>
               ) : (
                 <>
@@ -572,13 +672,13 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
                     placeholder="Explain the mechanism in your own words — not just the label."
                     style={taStyle} disabled={checking} />
                   {verdict && (
-                    <div className="glass-inner" style={{ marginTop: 10, padding: 12, borderLeft: `3px solid ${verdict.passed ? '#34D399' : '#60A5FA'}` }}>
-                      <p style={{ fontSize: 13, fontWeight: 700, color: verdict.passed ? '#34D399' : '#60A5FA' }}>
+                    <div className="glass-inner" style={{ marginTop: 10, padding: 12, borderLeft: `3px solid ${verdict.passed ? TONES.mastered : TONES.ready}` }}>
+                      <p style={{ fontSize: 13, fontWeight: 700, color: verdict.passed ? TONES.mastered : TONES.ready }}>
                         {verdict.passed ? '✓ Passed — concept mastered' : 'Not yet — keep going'}
                       </p>
                       {verdict.feedback && <p style={{ fontSize: 12, color: '#A1A1AA', marginTop: 4 }}>{verdict.feedback}</p>}
                       {!verdict.passed && verdict.follow_up_question && <p style={{ fontSize: 12, color: '#E4E4E7', marginTop: 8, fontStyle: 'italic' }}>↪ {verdict.follow_up_question}</p>}
-                      {!verdict.passed && verdict.model_answer && <p style={{ fontSize: 12, color: '#A78BFA', marginTop: 8 }}>Model answer: {verdict.model_answer}</p>}
+                      {!verdict.passed && verdict.model_answer && <p style={{ fontSize: 12, color: TONES.violet, marginTop: 8 }}>Model answer: {verdict.model_answer}</p>}
                     </div>
                   )}
                   {!verdict?.passed && (
@@ -607,7 +707,8 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
               </div>
             </div>
           )}
-          {error && <p role="alert" style={{ color: '#F87171', fontSize: 12, marginTop: 12 }}>{error}</p>}
+          {error && <p role="alert" style={{ color: TONES.danger, fontSize: 12, marginTop: 12 }}>{error}</p>}
+          </div>
         </div>
 
         {/* footer nav */}
@@ -634,6 +735,34 @@ function Section({ title, children }) {
   );
 }
 
+// Breaks a prose block into bite-size paragraphs that fade in one at a time —
+// so a 130-word concept reads as a few digestible beats, not a wall of text
+// (Mayer's segmenting + coherence). Splits on blank lines, else groups sentences.
+function Segmented({ text }) {
+  const paras = useMemo(() => {
+    const raw = (text || '').trim();
+    if (!raw) return [];
+    let parts = raw.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+      const sentences = raw.match(/[^.!?]+[.!?]+(?:\s|$)/g) || [raw];
+      parts = [];
+      for (let i = 0; i < sentences.length; i += 2) {
+        parts.push(sentences.slice(i, i + 2).join(' ').trim());
+      }
+    }
+    return parts.filter(Boolean);
+  }, [text]);
+
+  if (!paras.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {paras.map((p, i) => (
+        <p key={i} className="titan-rise" style={{ ...pStyle, animationDelay: `${i * 0.09}s` }}>{p}</p>
+      ))}
+    </div>
+  );
+}
+
 // Accessible single-select option group: proper ARIA radiogroup with roving
 // tabindex + arrow-key navigation (one tab stop per group).
 function OptionRadios({ groupId, options, value, onPick, disabled, styleFor }) {
@@ -655,7 +784,7 @@ function OptionRadios({ groupId, options, value, onPick, disabled, styleFor }) {
         const chosen = value === oi;
         const { border, bg } = styleFor
           ? styleFor(oi, chosen)
-          : { border: chosen ? '#3B82F6' : '#27272A', bg: chosen ? 'rgba(59,130,246,0.08)' : 'transparent' };
+          : { border: chosen ? TONES.ready : '#27272A', bg: chosen ? 'rgba(59,130,246,0.08)' : 'transparent' };
         const focusable = value == null ? oi === 0 : chosen;
         return (
           <button key={oi} type="button" role="radio" aria-checked={chosen}
@@ -690,13 +819,13 @@ function LessonQuiz({ quiz, choices, setChoices, result }) {
               styleFor={(oi, chosen) => {
                 let border = '#27272A', bg = 'transparent';
                 if (pq) {
-                  if (oi === pq.correct_index) { border = '#34D399'; bg = 'rgba(16,185,129,0.08)'; }
-                  else if (chosen && !pq.is_correct) { border = '#F87171'; bg = 'rgba(239,68,68,0.08)'; }
-                } else if (chosen) { border = '#3B82F6'; bg = 'rgba(59,130,246,0.08)'; }
+                  if (oi === pq.correct_index) { border = TONES.mastered; bg = 'rgba(16,185,129,0.08)'; }
+                  else if (chosen && !pq.is_correct) { border = TONES.danger; bg = 'rgba(239,68,68,0.08)'; }
+                } else if (chosen) { border = TONES.ready; bg = 'rgba(59,130,246,0.08)'; }
                 return { border, bg };
               }}
             />
-            {pq?.explanation && <p style={{ fontSize: 12, color: pq.is_correct ? '#34D399' : '#FBBF24', marginTop: 6 }}>{pq.is_correct ? '✓ ' : '✗ '}{pq.explanation}</p>}
+            {pq?.explanation && <p style={{ fontSize: 12, color: pq.is_correct ? TONES.mastered : TONES.progress, marginTop: 6 }}>{pq.is_correct ? '✓ ' : '✗ '}{pq.explanation}</p>}
           </div>
         );
       })}
@@ -766,7 +895,7 @@ function ProjectView({ moduleId, project: initial, onClose, onProgress, onStartN
   }
 
   if (loading) return <Overlay onClose={onClose}><div className="glass-card"><div className="skeleton" style={{ height: 300, borderRadius: 12 }} /></div></Overlay>;
-  if (!project) return <Overlay onClose={onClose}><div className="glass-card" style={{ textAlign: 'center', padding: 30 }}><p style={{ color: '#F87171' }}>{error || 'Project unavailable.'}</p><button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={onClose}>Close</button></div></Overlay>;
+  if (!project) return <Overlay onClose={onClose}><div className="glass-card" style={{ textAlign: 'center', padding: 30 }}><p style={{ color: TONES.danger }}>{error || 'Project unavailable.'}</p><button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={onClose}>Close</button></div></Overlay>;
 
   return (
     <Overlay onClose={onClose}>
@@ -781,7 +910,7 @@ function ProjectView({ moduleId, project: initial, onClose, onProgress, onStartN
         <p style={{ ...pStyle, marginBottom: 16 }}>{brief.description}</p>
 
         {isNegotiation ? (
-          <div className="glass-inner" style={{ padding: 16, textAlign: 'center', borderLeft: '3px solid #EC4899' }}>
+          <div className="glass-inner" style={{ padding: 16, textAlign: 'center', borderLeft: `3px solid ${TONES.rose}` }}>
             <p style={{ ...pStyle, marginBottom: 12 }}>This one's live. You'll negotiate against an AI counterpart — name your ask and hold the line.</p>
             <button className="btn btn-primary" onClick={() => onStartNegotiation(project.module_id)}>
               <FiMessageCircle size={14} /> Start the simulation
@@ -799,7 +928,7 @@ function ProjectView({ moduleId, project: initial, onClose, onProgress, onStartN
                     role="checkbox" aria-checked={isDone}
                     aria-label={`${s.title}${isDone ? ' — completed' : ''}`}
                     style={{ textAlign: 'left', padding: 12, borderRadius: 10, cursor: 'pointer', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                    <span style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${isDone ? '#34D399' : '#3F3F46'}`, background: isDone ? '#34D399' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0D0D0F' }}>
+                    <span style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, border: `2px solid ${isDone ? TONES.mastered : '#3F3F46'}`, background: isDone ? TONES.mastered : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0D0D0F' }}>
                       {isDone && <FiCheck size={14} />}
                     </span>
                     <div style={{ flex: 1 }}>
@@ -811,7 +940,7 @@ function ProjectView({ moduleId, project: initial, onClose, onProgress, onStartN
                 );
               })}
             </div>
-            {error && <p role="alert" style={{ color: '#F87171', fontSize: 12, marginTop: -8, marginBottom: 12 }}>{error}</p>}
+            {error && <p role="alert" style={{ color: TONES.danger, fontSize: 12, marginTop: -8, marginBottom: 12 }}>{error}</p>}
 
             {brief.starter_code && (
               <>
@@ -839,7 +968,7 @@ function ProjectView({ moduleId, project: initial, onClose, onProgress, onStartN
                 <textarea value={submission} onChange={(e) => setSubmission(e.target.value)} rows={8}
                   placeholder="Paste your code, write-up, or log here — then submit for AI review."
                   style={taStyle} disabled={submitting} />
-                {error && <p role="alert" style={{ color: '#F87171', fontSize: 12, marginTop: 8 }}>{error}</p>}
+                {error && <p role="alert" style={{ color: TONES.danger, fontSize: 12, marginTop: 8 }}>{error}</p>}
                 <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={!submission.trim() || submitting} onClick={submit}>
                   {submitting ? 'Grading…' : <><FiSend size={14} /> Submit for AI review</>}
                 </button>
@@ -855,21 +984,21 @@ function ProjectView({ moduleId, project: initial, onClose, onProgress, onStartN
 function GradeCard({ grade, onRetry }) {
   const passed = grade.passed;
   return (
-    <div className="glass-inner" style={{ padding: 16, borderLeft: `3px solid ${passed ? '#34D399' : '#FBBF24'}` }}>
+    <div className="glass-inner" style={{ padding: 16, borderLeft: `3px solid ${passed ? TONES.mastered : TONES.progress}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 28, fontWeight: 800, color: passed ? '#34D399' : '#FBBF24' }}>{grade.score}%</span>
-        <span style={{ fontSize: 14, fontWeight: 700, color: passed ? '#34D399' : '#FBBF24' }}>{passed ? 'Passed 🎉' : 'Solid start'}</span>
+        <span style={{ fontSize: 28, fontWeight: 800, color: passed ? TONES.mastered : TONES.progress }}>{grade.score}%</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: passed ? TONES.mastered : TONES.progress }}>{passed ? 'Passed 🎉' : 'Solid start'}</span>
       </div>
       {grade.summary && <p style={{ ...pStyle, marginBottom: 12 }}>{grade.summary}</p>}
       {(grade.strengths || []).length > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <p style={{ fontSize: 11, color: '#34D399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Strengths</p>
+          <p style={{ fontSize: 11, color: TONES.mastered, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Strengths</p>
           <ul style={{ margin: 0, paddingLeft: 18 }}>{grade.strengths.map((s, i) => <li key={i} style={{ fontSize: 13, color: '#A1A1AA', marginBottom: 2 }}>{s}</li>)}</ul>
         </div>
       )}
       {(grade.improvements || []).length > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <p style={{ fontSize: 11, color: '#FBBF24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Make it better</p>
+          <p style={{ fontSize: 11, color: TONES.progress, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Make it better</p>
           <ul style={{ margin: 0, paddingLeft: 18 }}>{grade.improvements.map((s, i) => <li key={i} style={{ fontSize: 13, color: '#A1A1AA', marginBottom: 2 }}>{s}</li>)}</ul>
         </div>
       )}
@@ -917,7 +1046,7 @@ function NegotiationView({ moduleId, onClose, onProgress }) {
   }
 
   if (loading) return <Overlay onClose={onClose}><div className="glass-card"><div className="skeleton" style={{ height: 280, borderRadius: 12 }} /></div></Overlay>;
-  if (!session) return <Overlay onClose={onClose}><div className="glass-card" style={{ textAlign: 'center', padding: 30 }}><p style={{ color: '#F87171' }}>{error}</p><button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={onClose}>Close</button></div></Overlay>;
+  if (!session) return <Overlay onClose={onClose}><div className="glass-card" style={{ textAlign: 'center', padding: 30 }}><p style={{ color: TONES.danger }}>{error}</p><button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={onClose}>Close</button></div></Overlay>;
 
   const sc = session.scenario || {};
   const done = !!session.completed_at;
@@ -952,14 +1081,14 @@ function NegotiationView({ moduleId, onClose, onProgress }) {
         </div>
 
         {done ? (
-          <div className="glass-inner" style={{ padding: 16, borderLeft: '3px solid #34D399' }}>
+          <div className="glass-inner" style={{ padding: 16, borderLeft: `3px solid ${TONES.mastered}` }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <span style={{ fontSize: 26, fontWeight: 800, color: '#34D399' }}>{out?.score}</span>
+              <span style={{ fontSize: 26, fontWeight: 800, color: TONES.mastered }}>{out?.score}</span>
               <span style={{ fontSize: 14, fontWeight: 700, color: '#FAFAFA' }}>Debrief</span>
             </div>
             <p style={{ ...pStyle, marginBottom: 10 }}>{out?.analysis}</p>
-            {(out?.what_worked || []).length > 0 && <Bullets title="What worked" color="#34D399" items={out.what_worked} />}
-            {(out?.what_cost_you || []).length > 0 && <Bullets title="What cost you" color="#FBBF24" items={out.what_cost_you} />}
+            {(out?.what_worked || []).length > 0 && <Bullets title="What worked" color={TONES.mastered} items={out.what_worked} />}
+            {(out?.what_cost_you || []).length > 0 && <Bullets title="What cost you" color={TONES.progress} items={out.what_cost_you} />}
             <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={onClose}>Done</button>
           </div>
         ) : (
@@ -973,7 +1102,7 @@ function NegotiationView({ moduleId, onClose, onProgress }) {
             <button className="btn btn-ghost" style={{ marginTop: 10 }} disabled={busy || (session.rounds || []).length < 3} onClick={finish}>
               End & get my debrief
             </button>
-            {error && <p role="alert" style={{ color: '#F87171', fontSize: 12, marginTop: 8 }}>{error}</p>}
+            {error && <p role="alert" style={{ color: TONES.danger, fontSize: 12, marginTop: 8 }}>{error}</p>}
           </>
         )}
       </div>
@@ -999,7 +1128,7 @@ function SyllabusView({ tracks, modules, onClose, onOpen }) {
     <Overlay onClose={onClose}>
       <div className="glass-card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <FiList style={{ color: '#60A5FA' }} />
+          <FiList style={{ color: TONES.ready }} />
           <span style={{ fontSize: 16, fontWeight: 800, color: '#FAFAFA' }}>The full syllabus</span>
           <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: 6 }} onClick={onClose} aria-label="Close"><FiX size={16} /></button>
         </div>
@@ -1009,7 +1138,7 @@ function SyllabusView({ tracks, modules, onClose, onOpen }) {
           return (
             <div key={t.id} style={{ marginBottom: 20 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 3, background: t.color_theme || '#3B82F6' }} />
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: mute(t.color_theme || TONES.ready) }} />
                 <span style={{ fontSize: 14, fontWeight: 700, color: '#FAFAFA' }}>{t.name}</span>
                 <span style={{ fontSize: 11, color: '#71717A', marginLeft: 'auto' }}>{t.mastered_count}/{t.module_count}</span>
               </div>
@@ -1020,7 +1149,7 @@ function SyllabusView({ tracks, modules, onClose, onOpen }) {
                   const locked = m.status === 'locked';
                   return (
                     <button key={m.id} type="button" disabled={locked} onClick={() => !locked && onOpen(m.id)}
-                      className="glass-inner" style={{ textAlign: 'left', padding: 12, borderRadius: 10, cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? 0.55 : 1, display: 'flex', alignItems: 'center', gap: 10, border: here ? '1px solid #FBBF2455' : undefined }}>
+                      className="glass-inner" style={{ textAlign: 'left', padding: 12, borderRadius: 10, cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? 0.55 : 1, display: 'flex', alignItems: 'center', gap: 10, border: here ? `1px solid ${TONES.progress}55` : undefined }}>
                       <span style={{ fontSize: 15, color: meta.color, width: 20, textAlign: 'center' }}>
                         {m.status === 'mastered' ? '✓' : m.status === 'locked' ? '🔒' : m.status === 'in_progress' ? '◐' : '○'}
                       </span>
@@ -1028,7 +1157,7 @@ function SyllabusView({ tracks, modules, onClose, onOpen }) {
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#E4E4E7' }}>{m.title}</div>
                         {m.week_number && <div style={{ fontSize: 11, color: '#71717A' }}>Week {m.week_number}</div>}
                       </div>
-                      {here && <span style={{ fontSize: 10, fontWeight: 700, color: '#FBBF24' }}>YOU ARE HERE</span>}
+                      {here && <span style={{ fontSize: 10, fontWeight: 700, color: TONES.progress }}>YOU ARE HERE</span>}
                       <ConfidenceTag level={m.confidence_level} />
                     </button>
                   );
@@ -1071,7 +1200,7 @@ function TestView({ test, trackNames, onClose, onProgress }) {
     <Overlay onClose={onClose}>
       <div className="glass-card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <FiTrendingUp style={{ color: '#FBBF24' }} />
+          <FiTrendingUp style={{ color: TONES.progress }} />
           <span style={{ fontSize: 16, fontWeight: 800, color: '#FAFAFA', textTransform: 'capitalize' }}>{test.type} review</span>
           <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: 6 }} onClick={onClose} aria-label="Close"><FiX size={16} /></button>
         </div>
@@ -1079,7 +1208,7 @@ function TestView({ test, trackNames, onClose, onProgress }) {
         {result ? (
           <div>
             <div style={{ textAlign: 'center', marginBottom: 18 }}>
-              <div style={{ fontSize: 44, fontWeight: 800, color: result.score_overall >= 70 ? '#34D399' : '#FBBF24' }}>{result.score_overall}%</div>
+              <div style={{ fontSize: 44, fontWeight: 800, color: result.score_overall >= 70 ? TONES.mastered : TONES.progress }}>{result.score_overall}%</div>
               <div style={{ fontSize: 13, color: '#A1A1AA' }}>{result.correct}/{result.total} correct</div>
             </div>
             <h3 style={{ fontSize: 12, fontWeight: 700, color: '#71717A', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>By track</h3>
@@ -1088,23 +1217,23 @@ function TestView({ test, trackNames, onClose, onProgress }) {
                 <div key={code}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
                     <span style={{ color: '#E4E4E7' }}>{trackNames[code] || `Track ${code}`}</span>
-                    <span style={{ color: score >= 80 ? '#34D399' : score >= 60 ? '#FBBF24' : '#F87171', fontWeight: 700 }}>
+                    <span style={{ color: score >= 80 ? TONES.mastered : score >= 60 ? TONES.progress : TONES.danger, fontWeight: 700 }}>
                       {score}% · {score >= 80 ? 'Strong' : score >= 60 ? 'Good' : 'Needs work'}
                     </span>
                   </div>
                   <div style={{ height: 8, background: '#1A1A1F', borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ width: `${score}%`, height: '100%', background: score >= 80 ? '#34D399' : score >= 60 ? '#FBBF24' : '#F87171' }} />
+                    <div style={{ width: `${score}%`, height: '100%', background: score >= 80 ? TONES.mastered : score >= 60 ? TONES.progress : TONES.danger }} />
                   </div>
                 </div>
               ))}
             </div>
             <details style={{ marginBottom: 12 }}>
-              <summary style={{ fontSize: 12, color: '#60A5FA', cursor: 'pointer' }}>Review answers</summary>
+              <summary style={{ fontSize: 12, color: TONES.ready, cursor: 'pointer' }}>Review answers</summary>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
                 {(result.per_question || []).map((pq, i) => (
                   <div key={i} className="glass-inner" style={{ padding: 10 }}>
                     <p style={{ fontSize: 12, color: '#E4E4E7', marginBottom: 4 }}>{i + 1}. {pq.question}</p>
-                    <p style={{ fontSize: 12, color: pq.is_correct ? '#34D399' : '#F87171' }}>{pq.is_correct ? '✓ Correct' : '✗ Incorrect'} — {pq.explanation}</p>
+                    <p style={{ fontSize: 12, color: pq.is_correct ? TONES.mastered : TONES.danger }}>{pq.is_correct ? '✓ Correct' : '✗ Incorrect'} — {pq.explanation}</p>
                   </div>
                 ))}
               </div>
@@ -1126,7 +1255,7 @@ function TestView({ test, trackNames, onClose, onProgress }) {
                 </div>
               ))}
             </div>
-            {error && <p role="alert" style={{ color: '#F87171', fontSize: 12, marginTop: 10 }}>{error}</p>}
+            {error && <p role="alert" style={{ color: TONES.danger, fontSize: 12, marginTop: 10 }}>{error}</p>}
             <button className="btn btn-primary" style={{ marginTop: 14 }} disabled={!answered || submitting} onClick={submit}>
               {submitting ? 'Grading…' : 'Submit test'}
             </button>
@@ -1152,7 +1281,7 @@ function ScheduleSettings({ slots, trackOptions, onClose, onSave }) {
     <Overlay onClose={onClose}>
       <div className="glass-card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <FiSettings style={{ color: '#60A5FA' }} />
+          <FiSettings style={{ color: TONES.ready }} />
           <span style={{ fontSize: 16, fontWeight: 800, color: '#FAFAFA' }}>Your daily schedule</span>
           <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: 6 }} onClick={onClose} aria-label="Close"><FiX size={16} /></button>
         </div>
@@ -1271,7 +1400,7 @@ export default function TitanTrack() {
   if (error && !dash) {
     return (
       <div className="glass-card" style={{ textAlign: 'center', padding: 40 }}>
-        <p style={{ color: '#F87171', marginBottom: 12 }}>{error}</p>
+        <p style={{ color: TONES.danger, marginBottom: 12 }}>{error}</p>
         <button className="btn btn-primary" onClick={load}><FiRefreshCw size={14} /> Retry</button>
       </div>
     );

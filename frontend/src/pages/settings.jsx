@@ -3,6 +3,7 @@
  */
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/router';
 import Sidebar from '../components/Shared/Sidebar';
 import Header from '../components/Shared/Header';
 import { FiLink, FiCpu, FiBell, FiShield, FiUser, FiSave, FiDatabase } from 'react-icons/fi';
@@ -54,7 +55,12 @@ function Toggle({ label, description, enabled, onChange }) {
 }
 
 export default function Settings() {
+  const router = useRouter();
   const [activeSection, setActiveSection] = useState('settings');
+  // Sidebar nav from the settings page returns to the dashboard on the chosen section.
+  const handleNavigate = (section) => {
+    if (section !== 'settings') router.push(`/?section=${section}`);
+  };
   const [saving, setSaving]               = useState(false);
   const [profile, setProfile]             = useState({ name: 'Damarley', email: 'sir@omura.app', timezone: 'America/Jamaica (EST)' });
   const [notifications, setNotifications] = useState({ email: true, push: true, sms: false, weekly_scorecard: true });
@@ -104,7 +110,7 @@ export default function Settings() {
 
   return (
     <div className="flex min-h-screen bg-[#0A0B14]">
-      <Sidebar activeSection={activeSection} onNavigate={setActiveSection} />
+      <Sidebar activeSection={activeSection} onNavigate={handleNavigate} />
       <div className="flex-1 ml-64">
         <Header title="Settings" onSync={() => {}} />
         <main className="p-6 max-w-4xl space-y-6">

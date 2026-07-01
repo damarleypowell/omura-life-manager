@@ -209,6 +209,30 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
+# ── Single-user API auth gate ──
+# This backend is single-user. When OMURA_API_TOKEN is set (recommended for any
+# public deployment), every /api/* call must carry `Authorization: Bearer <token>`
+# — closing the hole where anyone with the URL could send email, blast outreach,
+# read synced mail, or disconnect Google. OAuth redirect routes and health checks
+# are exempt (browser redirects can't send the header). Unset (local dev) = open.
+_API_TOKEN = _os.environ.get("OMURA_API_TOKEN")
+_AUTH_EXEMPT = ("/auth/", "/health", "/api/health")
+
+class SingleUserAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        if _API_TOKEN and request.method != "OPTIONS":
+            path = request.url.path
+            if path.startswith("/api/") and not path.startswith(_AUTH_EXEMPT):
+                auth = request.headers.get("Authorization", "")
+                token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+                if token != _API_TOKEN:
+                    from starlette.responses import JSONResponse
+                    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        return await call_next(request)
+
+app.add_middleware(SingleUserAuthMiddleware)
+
+
 # ── Titan Track routers ──
 from backend.app.api import titan as _titan
 app.include_router(_titan.router)
@@ -335,6 +359,7 @@ class HealthEntryCreate(BaseModel):
     unit: Optional[str] = None
     notes: Optional[str] = None
     recorded_at: Optional[datetime] = None
+    extra_data: Optional[dict] = None  # e.g. {"intensity": "High"} / {"quality": "Good"}
 
 class NoteCreate(BaseModel):
     title: str
@@ -639,7 +664,8 @@ def list_health(category: Optional[str] = None, days: int = 7, db: Session = Dep
 
 @app.post("/api/health")
 def create_health_entry(data: HealthEntryCreate, db: Session = Depends(get_db)):
-    return crud.create_record(db, models.HealthEntry, **data.model_dump())
+    # exclude_none so unset optionals don't override the model's column defaults.
+    return crud.create_record(db, models.HealthEntry, **data.model_dump(exclude_none=True))
 
 
 # ══════════════════════════════════════════════
@@ -1083,86 +1109,13 @@ def google_auth_disconnect(db: Session = Depends(get_db)):
 
 @app.post("/api/sync/emails")
 def sync_emails(db: Session = Depends(get_db)):
-    """Sync emails from real Gmail API."""
-    access_token = _get_google_access_token()
-    if not access_token:
-        return {"status": "not_connected", "message": "Connect Google at /auth/google first"}
-
-    try:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        # Get message list
-        list_resp = _httpx.get(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-            headers=headers,
-            params={"maxResults": 30, "labelIds": "INBOX"},
-        )
-        if list_resp.status_code != 200:
-            return {"status": "error", "message": list_resp.text}
-
-        message_ids = [m["id"] for m in list_resp.json().get("messages", [])]
-        saved = 0
-
-        for msg_id in message_ids[:20]:
-            existing = db.query(models.Communication).filter(
-                models.Communication.external_id == msg_id
-            ).first()
-
-            # Fetch full message (needed for new records and to re-clean HTML bodies)
-            msg_resp = _httpx.get(
-                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
-                headers=headers,
-                params={"format": "full"},
-            )
-            if msg_resp.status_code != 200:
-                continue
-
-            msg = msg_resp.json()
-            headers_list = msg.get("payload", {}).get("headers", [])
-            header_map = {h["name"].lower(): h["value"] for h in headers_list}
-
-            subject = header_map.get("subject", "(no subject)")
-            sender = header_map.get("from", "unknown")
-            recipient = header_map.get("to", "")
-            date_str = header_map.get("date", "")
-
-            # Extract body — plain text preferred, HTML stripped as fallback
-            payload = msg.get("payload", {})
-            body = _extract_email_body(payload)
-
-            labels = msg.get("labelIds", [])
-            is_unread = "UNREAD" in labels
-
-            try:
-                received_at = datetime.strptime(date_str[:25].strip(), "%a, %d %b %Y %H:%M:%S") if date_str else datetime.utcnow()
-            except Exception:
-                received_at = datetime.utcnow()
-
-            if existing:
-                # Update body and subject in case it was stored as raw HTML before
-                existing.body = body[:10000]
-                existing.subject = subject[:500]
-                existing.sender = sender[:255]
-            else:
-                comm = models.Communication(
-                    platform="gmail",
-                    external_id=msg_id,
-                    sender=sender[:255],
-                    recipient=recipient[:255],
-                    subject=subject[:500],
-                    body=body[:10000],
-                    is_read=not is_unread,
-                    labels=labels,
-                    received_at=received_at,
-                )
-                db.add(comm)
-                saved += 1
-
-        db.commit()
-        crud.log_agent_action(db, "system", "sync_emails", output_data={"saved": saved}, status="success")
-        return {"status": "success", "synced": saved, "timestamp": datetime.utcnow().isoformat()}
-
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    """Sync emails from the real Gmail API into the Communication table."""
+    from backend.app.inbox_sync import sync_gmail_inbox
+    result = sync_gmail_inbox(db, max_results=30)
+    if result.get("status") == "success":
+        crud.log_agent_action(db, "system", "sync_emails",
+                              output_data={"saved": result.get("synced", 0)}, status="success")
+    return result
 
 
 @app.post("/api/sync/calendar")
@@ -1235,9 +1188,10 @@ def sync_calendar(db: Session = Depends(get_db)):
 
 @app.post("/api/sync/social")
 def sync_social(db: Session = Depends(get_db)):
-    """Trigger social media sync."""
-    crud.log_agent_action(db, "system", "sync_social", status="success")
-    return {"status": "Social media sync triggered", "timestamp": datetime.utcnow().isoformat()}
+    """Social sync is not connected yet — report honestly (no DM/post integration)."""
+    return {"status": "not_connected",
+            "message": "Social media sync isn't connected yet — nothing was synced.",
+            "synced": 0, "timestamp": datetime.utcnow().isoformat()}
 
 
 # ══════════════════════════════════════════════
@@ -1725,11 +1679,29 @@ def research_lead_endpoint(data: ResearchLeadRequest, db: Session = Depends(get_
 # Google Drive — Document Storage
 # ══════════════════════════════════════════════
 
+def _drive_client_or_none():
+    """Build a GoogleDriveClient authenticated with the stored Google token, or
+    None when Google isn't connected — so Drive routes use the REAL Drive (or say
+    not_connected) instead of returning fabricated mock files."""
+    token = _get_google_access_token()
+    if not token:
+        return None
+    from backend.app.api.gdrive_api import GoogleDriveClient
+    client = GoogleDriveClient()
+    client.set_access_token(token)
+    return client
+
+
+_DRIVE_NOT_CONNECTED = {"status": "not_connected",
+                        "message": "Connect Google at /auth/google to access Drive."}
+
+
 @app.get("/api/drive/files")
 async def drive_list_files(folder: Optional[str] = None, q: Optional[str] = None, page_size: int = 25):
     """List files in a Google Drive folder."""
-    from backend.app.api.gdrive_api import GoogleDriveClient
-    client = GoogleDriveClient()
+    client = _drive_client_or_none()
+    if not client:
+        return {**_DRIVE_NOT_CONNECTED, "files": []}
     try:
         return await client.list_files(folder_name=folder, query=q, page_size=page_size)
     finally:
@@ -1738,8 +1710,9 @@ async def drive_list_files(folder: Optional[str] = None, q: Optional[str] = None
 @app.get("/api/drive/files/{file_id}")
 async def drive_get_file(file_id: str):
     """Get metadata for a specific Google Drive file."""
-    from backend.app.api.gdrive_api import GoogleDriveClient
-    client = GoogleDriveClient()
+    client = _drive_client_or_none()
+    if not client:
+        return _DRIVE_NOT_CONNECTED
     try:
         return await client.get_file(file_id)
     finally:
@@ -1748,8 +1721,9 @@ async def drive_get_file(file_id: str):
 @app.get("/api/drive/folders")
 async def drive_folder_structure():
     """Get the Omura folder structure in Google Drive."""
-    from backend.app.api.gdrive_api import GoogleDriveClient
-    client = GoogleDriveClient()
+    client = _drive_client_or_none()
+    if not client:
+        return _DRIVE_NOT_CONNECTED
     try:
         return await client.ensure_folder_structure()
     finally:
@@ -1758,8 +1732,9 @@ async def drive_folder_structure():
 @app.get("/api/drive/lead/{lead_name}/documents")
 async def drive_lead_documents(lead_name: str):
     """List all documents for a specific lead in Google Drive."""
-    from backend.app.api.gdrive_api import GoogleDriveClient
-    client = GoogleDriveClient()
+    client = _drive_client_or_none()
+    if not client:
+        return {**_DRIVE_NOT_CONNECTED, "documents": []}
     try:
         return await client.get_lead_documents(lead_name)
     finally:
@@ -1779,7 +1754,9 @@ async def drive_backup(db: Session = Depends(get_db)):
         "backed_up_at": datetime.utcnow().isoformat(),
     }
 
-    client = GoogleDriveClient()
+    client = _drive_client_or_none()
+    if not client:
+        return _DRIVE_NOT_CONNECTED
     try:
         result = await client.backup_data(_json.dumps(backup_data, indent=2).encode("utf-8"))
         crud.log_agent_action(db, "system", "drive_backup", None, result, "success")

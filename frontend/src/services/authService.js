@@ -29,25 +29,15 @@ const OAUTH_PROVIDERS = {
  * Opens the provider's consent screen in a new window.
  */
 export function initiateOAuth(provider) {
-  const config = OAUTH_PROVIDERS[provider];
-  if (!config) throw new Error(`Unknown OAuth provider: ${provider}`);
-
-  const clientId = process.env[config.clientIdKey] || '';
-  const redirectUri = `${API_BASE}/auth/${provider}/callback`;
-  const state = generateState();
-
-  sessionStorage.setItem('oauth_state', state);
-  sessionStorage.setItem('oauth_provider', provider);
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    scope: config.scope,
-    response_type: 'code',
-    state,
-  });
-
-  window.location.href = `${config.authUrl}?${params.toString()}`;
+  if (provider === 'google') {
+    // Server-driven flow: the backend builds the consent URL (GET /auth/google),
+    // handles the callback, stores the token, and redirects back to /?google_connected=1.
+    window.location.href = `${API_BASE}/auth/google`;
+    return;
+  }
+  // Other providers aren't wired to the backend yet — fail honestly instead of
+  // sending the user to a dead client-side flow / non-existent token endpoint.
+  throw new Error(`${provider} sign-in isn't available yet.`);
 }
 
 /**

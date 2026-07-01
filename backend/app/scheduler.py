@@ -39,27 +39,32 @@ scheduler = _make_scheduler()
 
 
 def schedule_lead_followup_sequence(lead_id: int):
-    """Queue Touch 2/3/4 follow-up emails for a lead.
+    """Queue the research-grounded 30-day follow-up sequence for a lead.
 
-    Schedule:
-      Touch 1 = day 0  (sent immediately by send_initial_outreach)
-      Touch 2 = day 3
-      Touch 3 = day 7
-      Touch 4 = day 14
-      Loom    = triggered on reply (not scheduled here)
-
-    Jobs are persisted in PostgreSQL — survive Railway restarts.
+    Touches come from outreach_ai.FOLLOWUP_SEQUENCE (day 0 opener is sent
+    immediately by send_initial_outreach, so it's skipped here):
+      • email touches  -> auto-sent via send_followup_email
+      • LinkedIn/call  -> a Task is created for Damarley via create_followup_task
+    Jobs are persisted in the scheduler job store — survive restarts.
     """
-    from backend.app.scheduler_jobs import send_followup_email
+    from backend.app.scheduler_jobs import send_followup_email, create_followup_task
+    from backend.app.ai_agents.outreach_ai import FOLLOWUP_SEQUENCE
+
     now = datetime.utcnow()
-    for day in (3, 7, 14):
+    for touch in FOLLOWUP_SEQUENCE:
+        day = touch["day"]
+        if day <= 0:
+            continue  # day-0 opener handled by send_initial_outreach
         run_time = now + timedelta(days=day)
-        job_id = f"followup_lead{lead_id}_day{day}"
-        scheduler.add_job(
-            send_followup_email,
-            "date",
-            run_date=run_time,
-            args=[lead_id, day],
-            id=job_id,
-            replace_existing=True,
-        )
+        if touch["channel"] == "email":
+            scheduler.add_job(
+                send_followup_email, "date", run_date=run_time,
+                args=[lead_id, day], id=f"followup_lead{lead_id}_day{day}",
+                replace_existing=True,
+            )
+        else:  # linkedin / call -> actionable task for Damarley
+            scheduler.add_job(
+                create_followup_task, "date", run_date=run_time,
+                args=[lead_id, day], id=f"followuptask_lead{lead_id}_day{day}",
+                replace_existing=True,
+            )

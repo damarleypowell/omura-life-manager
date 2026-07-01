@@ -31,6 +31,39 @@ function StatRing({ value, max, label, color, icon: Icon }) {
 const EMPTY_WORKOUT = { type: '', duration: '', intensity: 'Moderate', notes: '' };
 const EMPTY_SLEEP = { hours: '', quality: 'Good', notes: '' };
 
+const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch { return ''; } };
+
+// Aggregate the flat HealthEntry list (what GET /api/health returns) into the
+// shape this dashboard renders. All values derive from real logged entries.
+function buildHealthView(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const workouts = list.filter((e) => e.category === 'workout');
+  const sleeps = list.filter((e) => e.category === 'sleep');
+  const supps = list.filter((e) => e.category === 'supplement');
+
+  const now = Date.now();
+  const sessions = workouts.filter((e) => now - new Date(e.recorded_at).getTime() <= 7 * 864e5).length;
+
+  // Day streak: consecutive days (ending today) with at least one workout.
+  const days = new Set(workouts.map((e) => new Date(e.recorded_at).toDateString()));
+  let streak = 0;
+  for (const d = new Date(); days.has(d.toDateString()); d.setDate(d.getDate() - 1)) streak++;
+
+  const lastSleepHours = sleeps.length ? Number(sleeps[0].value) || 0 : 0;
+  const sleepScore = Math.round(Math.min(lastSleepHours / 8, 1) * 100);
+  const energyScore = Math.round(0.5 * sleepScore + 0.5 * Math.min(sessions / 5, 1) * 100);
+
+  return {
+    energy_score: energyScore,
+    sleep: { score: sleepScore },
+    workouts: { sessions, streak },
+    supplements: supps.slice(0, 8).map((s) => ({ name: s.name || 'Supplement', dose: s.unit || '', time: fmtDate(s.recorded_at), taken: true })),
+    recent_workouts: workouts.slice(0, 6).map((w) => ({ type: w.name || 'Workout', date: fmtDate(w.recorded_at), duration: `${w.value || 0} ${w.unit || 'min'}`, intensity: (w.extra_data && w.extra_data.intensity) || 'Moderate' })),
+    sleep_log: sleeps.slice(0, 6).map((s) => ({ hours: s.value || 0, date: fmtDate(s.recorded_at), quality: (s.extra_data && s.extra_data.quality) || 'Good' })),
+    ai_recommendation: '',
+  };
+}
+
 export default function HealthDashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -42,18 +75,11 @@ export default function HealthDashboard() {
 
   async function loadData() {
     try {
-      const entries = await healthApi.list({ days: 7 });
-      setData(entries);
+      // GET /api/health returns a flat array of entries; aggregate it for display.
+      const entries = await healthApi.list({ days: 30 });
+      setData(buildHealthView(entries));
     } catch {
-      setData({
-        energy_score: 0,
-        sleep: {},
-        workouts: {},
-        supplements: [],
-        recent_workouts: [],
-        sleep_log: [],
-        ai_recommendation: '',
-      });
+      setData(buildHealthView([]));
     } finally { setLoading(false); }
   }
 
@@ -63,13 +89,16 @@ export default function HealthDashboard() {
   async function handleSave() {
     setSaving(true);
     try {
+      // Map the form to the HealthEntry schema (category/name/value/unit/notes/extra_data).
       const payload = modal === 'workout'
-        ? { entry_type: 'workout', ...form }
-        : { entry_type: 'sleep', ...form };
+        ? { category: 'workout', name: form.type || 'Workout', value: Number(form.duration) || 0,
+            unit: 'min', notes: form.notes || null, extra_data: { intensity: form.intensity } }
+        : { category: 'sleep', name: 'Sleep', value: Number(form.hours) || 0,
+            unit: 'hr', notes: form.notes || null, extra_data: { quality: form.quality } };
       await healthApi.create(payload);
       setModal(null);
       await loadData();
-    } catch { /* silently handled */ } finally { setSaving(false); }
+    } catch (e) { console.error('Failed to log health entry:', e); } finally { setSaving(false); }
   }
 
   if (loading) {

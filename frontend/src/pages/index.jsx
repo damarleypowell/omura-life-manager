@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import Sidebar from '../components/Shared/Sidebar';
 import Header from '../components/Shared/Header';
 import ChatInterface, { ChatPage } from '../components/Shared/ChatInterface';
@@ -52,7 +53,21 @@ const SECTION_COMPONENTS = {
 };
 
 export default function Dashboard() {
+  const router = useRouter();
   const [activeSection, setActiveSection] = useState('chat');
+
+  // Honor ?section=… so returning from the /settings page lands on the right tab.
+  useEffect(() => {
+    const s = router.query.section;
+    if (s && SECTION_COMPONENTS[s]) setActiveSection(s);
+  }, [router.query.section]);
+
+  // 'settings' is a real page route, not an in-dashboard section — navigate to it
+  // instead of resolving an undefined section component (which rendered blank).
+  const handleNavigate = (section) => {
+    if (section === 'settings') router.push('/settings');
+    else setActiveSection(section);
+  };
 
   const ActiveComponent = SECTION_COMPONENTS[activeSection];
 
@@ -61,12 +76,12 @@ export default function Dashboard() {
       <div className="ambient-bg" />
 
       <div className="relative z-10 flex min-h-screen">
-        <Sidebar activeSection={activeSection} onNavigate={setActiveSection} />
+        <Sidebar activeSection={activeSection} onNavigate={handleNavigate} />
 
         <div className="flex-1 flex flex-col" style={{ marginLeft: '220px' }}>
           <Header
             title={SECTION_TITLES[activeSection] || 'Omura'}
-            onNavigate={setActiveSection}
+            onNavigate={handleNavigate}
           />
 
           <main className="flex-1 p-6 space-y-6">

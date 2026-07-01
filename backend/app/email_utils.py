@@ -17,33 +17,72 @@ _send_log = _logging.getLogger("email_utils")
 
 
 def send_via_sendgrid(to: str, subject: str, body: str, cc: str = None, html_body: str = None) -> dict:
-    """Send email. Uses Gmail API (OAuth token) if connected, falls back to SMTP.
+    """Send email FROM ironlogic.business@gmail.com.
+
+    Primary: Gmail SMTP (app password — works locally, no OAuth). Fallbacks:
+    Resend (verified domain ironlogic.cc), then Gmail API (if OAuth is valid).
 
     Function name kept as send_via_sendgrid to avoid breaking all callers.
     """
-    gmail_api_error: str | None = None
+    errors: list[str] = []
 
-    # ── Try Gmail API first (works on Railway — HTTPS, not SMTP) ──
+    # ── Primary: Gmail SMTP — sends as ironlogic.business@gmail.com ──
+    try:
+        return _send_via_smtp(to, subject, body, cc, html_body)
+    except Exception as _smtp_e:
+        errors.append(f"Gmail SMTP: {_smtp_e}")
+        _send_log.warning("Gmail SMTP failed, trying Resend fallback: %s", _smtp_e)
+
+    # ── Fallback 1: Resend (verified domain ironlogic.cc) ──
+    if settings.RESEND_API_KEY:
+        try:
+            return _send_via_resend(to, subject, body, cc, html_body)
+        except Exception as _re:
+            errors.append(f"Resend: {_re}")
+            _send_log.warning("Resend send failed, trying Gmail API fallback: %s", _re)
+
+    # ── Fallback 2: Gmail API (requires a valid Google OAuth token) ──
     try:
         from backend.app.google_utils import get_google_access_token
         access_token = get_google_access_token()
         if access_token:
             return _send_via_gmail_api(access_token, to, subject, body, cc, html_body)
         else:
-            gmail_api_error = "No Google OAuth token stored — visit /auth/google to connect Gmail"
+            errors.append("Gmail API: no Google OAuth token — visit /auth/google to reconnect")
     except Exception as _e:
-        gmail_api_error = f"Gmail API error: {_e}"
-        _send_log.warning("Gmail API send failed, trying SMTP fallback: %s", _e)
+        errors.append(f"Gmail API: {_e}")
 
-    # ── Fallback: Gmail SMTP (works locally, blocked on Railway) ──
-    try:
-        return _send_via_smtp(to, subject, body, cc, html_body)
-    except Exception as _smtp_e:
-        # Both paths failed — raise a combined error so the caller knows why
-        raise RuntimeError(
-            f"Email delivery failed — Gmail API: [{gmail_api_error}]; "
-            f"SMTP fallback: [{_smtp_e}]"
-        ) from _smtp_e
+    raise RuntimeError("Email delivery failed — " + "; ".join(f"[{e}]" for e in errors))
+
+
+def _send_via_resend(to: str, subject: str, body: str, cc: str = None, html_body: str = None) -> dict:
+    """Send via the Resend HTTPS API (https://resend.com)."""
+    from_addr = settings.RESEND_FROM or settings.DEFAULT_FROM_EMAIL
+    payload: dict = {"from": from_addr, "to": [to], "subject": subject, "text": body}
+    if html_body:
+        payload["html"] = html_body
+    if cc:
+        payload["cc"] = [cc]
+
+    resp = httpx.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {settings.RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=30,
+    )
+    if resp.status_code not in (200, 201, 202):
+        raise Exception(f"Resend API error {resp.status_code}: {resp.text[:200]}")
+
+    data = resp.json() if resp.content else {}
+    return {
+        "sent": True, "to": to, "subject": subject,
+        "provider": "resend", "id": data.get("id"),
+        "status_code": resp.status_code,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
 
 def _build_mime(to: str, subject: str, body: str, cc: str = None, html_body: str = None):

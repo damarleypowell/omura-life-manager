@@ -112,6 +112,11 @@ class StreakCheckinRequest(BaseModel):
     minutes: Optional[int] = 0
 
 
+class TtsRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+
+
 # ── Defaults / helpers for the v2 (Duolingo-style) layer ─────────────
 
 DEFAULT_SLOTS = [
@@ -832,6 +837,53 @@ def refresh_module_lesson(module_id: int, db: Session = Depends(get_db)):
         "quiz_passed": bool(latest and latest.quiz_score >= QUIZ_PASS_THRESHOLD),
         "mastered": m.status == "mastered",
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# Narration (text-to-speech) — Edge neural voice, free, no API key
+# ══════════════════════════════════════════════════════════════════
+
+# A warm, natural conversational voice. If this name is ever retired the call
+# raises and the frontend falls back to the browser's built-in voice, so the
+# Listen button always works.
+TTS_DEFAULT_VOICE = "en-US-AndrewNeural"
+TTS_MAX_CHARS = 1800  # one lesson step; keeps synthesis fast and bounded
+
+
+@router.post("/tts")
+async def titan_tts(data: TtsRequest):
+    """Read lesson text aloud using Microsoft Edge's free neural voices.
+
+    Returns audio/mpeg bytes. Degrades by design: if edge-tts is missing or the
+    upstream voice call fails, this 5xx's and the client falls back to the
+    browser's Web Speech API — narration is never a hard dependency.
+    """
+    text = (data.text or "").strip()
+    if not text:
+        raise HTTPException(400, "No text to narrate.")
+    text = text[:TTS_MAX_CHARS]
+
+    try:
+        import edge_tts
+    except ImportError:
+        raise HTTPException(503, "Edge TTS is not installed on the server.")
+
+    voice = (data.voice or TTS_DEFAULT_VOICE).strip() or TTS_DEFAULT_VOICE
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        audio = bytearray()
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio" and chunk.get("data"):
+                audio.extend(chunk["data"])
+    except Exception as exc:  # noqa: BLE001 — any upstream failure → client fallback
+        raise HTTPException(502, f"Narration unavailable: {exc}")
+
+    if not audio:
+        raise HTTPException(502, "Narration produced no audio.")
+
+    from fastapi import Response
+    return Response(content=bytes(audio), media_type="audio/mpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 # ══════════════════════════════════════════════════════════════════

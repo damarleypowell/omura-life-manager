@@ -6,48 +6,32 @@ from datetime import datetime
 
 
 def send_followup_email(lead_id: int, day: int):
-    """Send a scheduled follow-up email for a lead on day 2, 4, or 7."""
+    """Send a scheduled follow-up email using the FOLLOWUP_SEQUENCE template."""
     from backend.app.database.session import SessionLocal
     from backend.app.database import models, crud
     from backend.app.email_utils import send_via_sendgrid
+    from backend.app.ai_agents.outreach_ai import get_followup_touch, fill_followup
 
     db = SessionLocal()
     try:
         lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
         if not lead:
             return
-        if lead.status not in (models.LeadStatus.NEW, models.LeadStatus.CONTACTED):
+        # Stop the sequence if the lead replied/closed (won/lost) or has no email.
+        if lead.status in (models.LeadStatus.WON, models.LeadStatus.LOST, models.LeadStatus.INVALID):
             return
         if not lead.email:
             return
 
-        # Use the exact proven templates stored in the lead notes
-        notes = lead.notes or ""
-        touch_map = {3: "TOUCH 2", 7: "TOUCH 3", 14: "TOUCH 4"}
-        touch_header = touch_map.get(day, "TOUCH 2")
+        touch = get_followup_touch(day)
+        if not touch or touch.get("channel") != "email":
+            return
+        filled = fill_followup(touch, lead)
 
-        def _extract_section(text: str, header: str) -> str:
-            start = text.find(f"[{header}]")
-            if start == -1:
-                return ""
-            after = text.find("\n", start) + 1
-            next_bracket = text.find("\n[", after)
-            return (text[after:next_bracket] if next_bracket != -1 else text[after:]).strip()
-
-        body = _extract_section(notes, touch_header)
-        if not body:
-            # Fallback if template not found
-            body = f"Hi {lead.name.split()[0]},\n\nJust following up on my last message.\n\nWorth a quick chat?\n\n— Damarley"
-
-        subject_line = _extract_section(notes, "OUTREACH COPY")
-        # Extract subject from the copy block
-        subject = ""
-        for line in subject_line.split("\n"):
-            if line.startswith("Subject:"):
-                subject = line.replace("Subject:", "").strip()
-                break
-        if not subject:
-            subject = f"Re: {lead.company or lead.name}"
+        body = filled.get("body") or (
+            f"Hi {lead.name.split()[0]},\n\nFollowing up on my last note — worth a quick chat?\n\nDamarley"
+        )
+        subject = filled.get("subject") or f"Re: {lead.company or lead.name}"
 
         result = send_via_sendgrid(to=lead.email, subject=subject, body=body)
         lead.status = models.LeadStatus.CONTACTED
@@ -55,12 +39,58 @@ def send_followup_email(lead_id: int, day: int):
         db.commit()
 
         crud.log_agent_action(db, "automation", f"followup_day{day}",
-            input_data={"lead_id": lead_id, "email": lead.email},
+            input_data={"lead_id": lead_id, "email": lead.email, "purpose": touch.get("purpose")},
             output_data=result, status="success")
 
     except Exception as exc:
         from backend.app.database import crud
         crud.log_agent_action(db, "automation", f"followup_day{day}",
+            input_data={"lead_id": lead_id}, status="error", error_message=str(exc))
+    finally:
+        db.close()
+
+
+def create_followup_task(lead_id: int, day: int):
+    """Create a Task for a non-inbox follow-up touch (LinkedIn / call), since the
+    app can't perform those itself. Pulls the script from FOLLOWUP_SEQUENCE."""
+    from backend.app.database.session import SessionLocal
+    from backend.app.database import models, crud
+    from backend.app.ai_agents.outreach_ai import get_followup_touch, fill_followup
+
+    db = SessionLocal()
+    try:
+        lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
+        if not lead:
+            return
+        if lead.status in (models.LeadStatus.WON, models.LeadStatus.LOST, models.LeadStatus.INVALID):
+            return
+
+        touch = get_followup_touch(day)
+        if not touch or touch.get("channel") == "email":
+            return
+        filled = fill_followup(touch, lead)
+
+        channel = touch.get("channel", "task").upper()
+        who = lead.name + (f" ({lead.company})" if lead.company else "")
+        title = f"{channel} follow-up — {who}"[:255]
+        description = (
+            f"Day {day} · {touch.get('purpose', '')}\n\n"
+            f"{filled.get('script', '')}\n\n"
+            f"Best time: Tue–Thu, ~10am–1pm in their local time."
+        )
+        crud.create_record(
+            db, models.Task,
+            title=title, description=description,
+            priority=models.UrgencyLevel.MEDIUM,
+            due_date=datetime.utcnow(),
+        )
+        crud.log_agent_action(db, "automation", f"followup_task_day{day}",
+            input_data={"lead_id": lead_id, "channel": channel}, output_data={"title": title},
+            status="success")
+
+    except Exception as exc:
+        from backend.app.database import crud
+        crud.log_agent_action(db, "automation", f"followup_task_day{day}",
             input_data={"lead_id": lead_id}, status="error", error_message=str(exc))
     finally:
         db.close()

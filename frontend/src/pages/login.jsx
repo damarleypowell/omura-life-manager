@@ -56,7 +56,7 @@ export default function Login() {
               return (
                 <button
                   key={provider.id}
-                  onClick={() => initiateOAuth(provider.id)}
+                  onClick={() => { try { initiateOAuth(provider.id); } catch (e) { alert(e.message); } }}
                   className={`w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-xl
                     text-white font-medium transition-all duration-300
                     bg-gradient-to-r ${provider.color}

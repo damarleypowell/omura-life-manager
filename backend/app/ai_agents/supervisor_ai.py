@@ -490,13 +490,14 @@ SUPERVISOR_TOOLS: List[Dict[str, Any]] = [
             "on-demand — they are NOT running in the background. Available agents:\n"
             "- inbox: triage_messages, summarize_message, suggest_response, flag_urgent, process_inbox\n"
             "- crm: score_lead, suggest_followup, analyze_pipeline, automate_outreach, classify_lead_source\n"
-            "- content: draft_post, schedule_post, generate_caption, analyze_performance\n"
-            "- project: generate_daily_agenda, detect_bottlenecks, prioritize_tasks\n"
-            "- finance: generate_kpi_report, detect_anomalies, forecast_revenue\n"
-            "- health: analyze_sleep, score_energy, generate_supplement_plan\n"
-            "- market: scan_competitors, identify_trends, find_opportunities\n"
-            "- scenario: run_simulation, evaluate_decision\n"
-            "- automation: run_workflow, execute_outreach_sequence\n"
+            "- content: generate_draft, edit_content, generate_hashtags, schedule_post, analyze_performance, suggest_content_ideas\n"
+            "- project: analyze_pipeline, predict_bottlenecks, suggest_task_priority, generate_daily_agenda, estimate_completion\n"
+            "- finance: calculate_kpis, detect_anomalies, generate_report, suggest_optimizations, forecast_revenue\n"
+            "- health: analyze_sleep, analyze_workouts, review_supplements, generate_daily_recommendation, calculate_energy_score\n"
+            "- market: monitor_competitors, identify_trends, find_opportunities, analyze_audience, generate_market_report\n"
+            "- scenario: simulate_business, simulate_finance, simulate_content, simulate_life, compare_scenarios, get_recommendation\n"
+            "- automation: execute_email_task, execute_posting_task, execute_followup_task, execute_update_task, run_workflow\n"
+            "- outreach: run_pipeline, send_initial_outreach, find_leads_by_domains\n"
             "- tutor: get_daily_session, grade_module_attempt, run_explain_back_check, generate_leadership_rep_review, generate_module_content (Titan Track learning system)"
         ),
         "input_schema": {
@@ -1033,13 +1034,14 @@ You can directly manage:
 You can delegate to specialized agents via the `run_agent` tool (on-demand only — they do NOT run in the background):
 - **inbox**: triage_messages, summarize_message, suggest_response, flag_urgent, process_inbox
 - **crm**: score_lead, suggest_followup, analyze_pipeline, automate_outreach, classify_lead_source
-- **content**: draft_post, schedule_post, generate_caption, analyze_performance
-- **project**: generate_daily_agenda, detect_bottlenecks, prioritize_tasks
-- **finance**: generate_kpi_report, detect_anomalies, forecast_revenue
-- **health**: analyze_sleep, score_energy, generate_supplement_plan
-- **market**: scan_competitors, identify_trends, find_opportunities
-- **scenario**: run_simulation, evaluate_decision
-- **automation**: run_workflow, execute_outreach_sequence
+- **content**: generate_draft, edit_content, generate_hashtags, schedule_post, analyze_performance, suggest_content_ideas
+- **project**: analyze_pipeline, predict_bottlenecks, suggest_task_priority, generate_daily_agenda, estimate_completion
+- **finance**: calculate_kpis, detect_anomalies, generate_report, suggest_optimizations, forecast_revenue
+- **health**: analyze_sleep, analyze_workouts, review_supplements, generate_daily_recommendation, calculate_energy_score
+- **market**: monitor_competitors, identify_trends, find_opportunities, analyze_audience, generate_market_report
+- **scenario**: simulate_business, simulate_finance, simulate_content, simulate_life, compare_scenarios, get_recommendation
+- **automation**: execute_email_task, execute_posting_task, execute_followup_task, execute_update_task, run_workflow
+- **outreach**: run_pipeline, send_initial_outreach, find_leads_by_domains
 - **tutor** (Titan Track): get_daily_session, grade_module_attempt, run_explain_back_check, generate_leadership_rep_review, generate_module_content
 
 Use `run_agent` only when specialized analysis is genuinely needed — for routine CRUD and conversation, handle it directly with your own tools to conserve API credits.

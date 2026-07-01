@@ -323,13 +323,8 @@ class GoogleDriveClient:
         self._logger.info("Getting Drive file metadata", file_id=file_id)
 
         if not self.is_configured:
-            return {
-                "id": file_id,
-                "name": "document.pdf",
-                "mimeType": "application/pdf",
-                "size": "1048576",
-                "webViewLink": f"https://drive.google.com/file/d/{file_id}/view",
-            }
+            return {"status": "not_connected", "id": file_id,
+                    "message": "Google Drive isn't connected."}
 
         try:
             resp = await self._http.get(
@@ -441,17 +436,7 @@ class GoogleDriveClient:
         self._logger.info("Fetching lead documents", lead=lead_name)
 
         if not self.is_configured:
-            return [
-                {
-                    "id": f"mock_doc_{i}",
-                    "name": f"{['Proposal', 'Contract', 'Invoice'][i - 1]}_{lead_name}.pdf",
-                    "mimeType": "application/pdf",
-                    "size": str(1024 * 100 * i),
-                    "createdTime": datetime.now(timezone.utc).isoformat(),
-                    "webViewLink": f"https://drive.google.com/file/d/mock_doc_{i}/view",
-                }
-                for i in range(1, 4)
-            ]
+            return []  # not connected — no documents (never fabricate)
 
         folders = await self.ensure_folder_structure()
         leads_folder_id = folders.get("Leads & Customers")
@@ -514,59 +499,19 @@ class GoogleDriveClient:
     # Mock helpers
     # ──────────────────────────────────────────────
 
+    # The following "_mock_*" methods used to fabricate Drive contents. They now
+    # return honest not-connected results so the app never presents invented files
+    # as if they were the user's real Drive. (Kept as methods so existing call
+    # sites — not-configured branches and on-error fallbacks — degrade honestly.)
+    _NOT_CONNECTED = "Google Drive isn't connected — reconnect at /auth/google."
+
     def _mock_folder_structure(self) -> Dict[str, str]:
-        return {
-            self.OMURA_ROOT_FOLDER: "mock_root_folder_id",
-            "Leads & Customers": "mock_leads_folder_id",
-            "Contracts": "mock_contracts_folder_id",
-            "Content Assets": "mock_content_folder_id",
-            "Reports": "mock_reports_folder_id",
-            "Backups": "mock_backups_folder_id",
-        }
+        return {}  # never fabricate folder IDs
 
     def _mock_file_upload(self, file_name: str, mime_type: str, folder: Optional[str]) -> Dict[str, Any]:
-        return {
-            "id": f"mock_file_{file_name.replace(' ', '_').replace('.', '_')}",
-            "name": file_name,
-            "mimeType": mime_type,
-            "size": "102400",
-            "webViewLink": f"https://drive.google.com/file/d/mock_{file_name}/view",
-            "createdTime": datetime.now(timezone.utc).isoformat(),
-            "folder": folder or self.OMURA_ROOT_FOLDER,
-        }
+        return {"status": "not_connected", "uploaded": False,
+                "message": self._NOT_CONNECTED, "name": file_name}
 
     def _mock_file_list(self, folder_name: Optional[str]) -> Dict[str, Any]:
-        folder = folder_name or self.OMURA_ROOT_FOLDER
-        now = datetime.now(timezone.utc).isoformat()
-        return {
-            "files": [
-                {
-                    "id": "mock_file_001",
-                    "name": "Q1_Revenue_Report.pdf",
-                    "mimeType": "application/pdf",
-                    "size": "245760",
-                    "createdTime": now,
-                    "modifiedTime": now,
-                    "webViewLink": "https://drive.google.com/file/d/mock_file_001/view",
-                },
-                {
-                    "id": "mock_file_002",
-                    "name": "Client_Proposal_Template.docx",
-                    "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "size": "51200",
-                    "createdTime": now,
-                    "modifiedTime": now,
-                    "webViewLink": "https://drive.google.com/file/d/mock_file_002/view",
-                },
-                {
-                    "id": "mock_file_003",
-                    "name": "Campaign_Assets.zip",
-                    "mimeType": "application/zip",
-                    "size": "5242880",
-                    "createdTime": now,
-                    "modifiedTime": now,
-                    "webViewLink": "https://drive.google.com/file/d/mock_file_003/view",
-                },
-            ],
-            "nextPageToken": None,
-        }
+        return {"status": "not_connected", "files": [], "nextPageToken": None,
+                "message": self._NOT_CONNECTED}

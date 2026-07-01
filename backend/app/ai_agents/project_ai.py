@@ -526,7 +526,13 @@ class ProjectAI:
             self.logger.debug(f"Claude API returned valid response for task={task}")
             return result
 
-        # ── Fallback: mock responses keyed by task ──
+        # AI unavailable (Claude outage after retries) — honest marker instead of
+        # fabricated figures; callers read with .get(...) and degrade to empties.
+        self.logger.warning("AI unavailable — returning ai_unavailable for task=%s", task)
+        return {"status": "ai_unavailable",
+                "error": "The AI is temporarily unavailable; no data could be generated."}
+
+        # ── Legacy placeholder responses below are unreachable (kept for shape ref) ──
         self.logger.info("Falling back to mock response for task=%s", task)
 
         now = datetime.now(timezone.utc)

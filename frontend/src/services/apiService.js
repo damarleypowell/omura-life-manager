@@ -258,6 +258,9 @@ export const titan = {
   getLesson: (moduleId) => api.get(`/api/titan/modules/${moduleId}/lesson`),
   // Opt-in: ask the AI to re-author this lesson (near-term modules only)
   refreshLesson: (moduleId) => api.post(`/api/titan/modules/${moduleId}/refresh`),
+  // Narration: returns raw mp3 bytes (ArrayBuffer) for the Listen button.
+  tts: (text, voice) =>
+    api.post('/api/titan/tts', { text, voice }, { responseType: 'arraybuffer' }),
   // Schedule preferences
   getSchedulePreferences: () => api.get('/api/titan/schedule/preferences'),
   updateSchedulePreferences: (slots) => api.put('/api/titan/schedule/preferences', { slots }),

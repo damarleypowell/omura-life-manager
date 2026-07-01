@@ -217,18 +217,29 @@ class InboxAI:
         """
         self.logger.info("Starting full inbox processing pipeline")
 
-        # Step 1: Fetch unread messages (placeholder DB query)
+        # Step 0: Pull live mail from Gmail into the Communication table so we
+        # triage the user's REAL inbox, not a stale/empty table. Best-effort —
+        # surfaces a clear status (e.g. not_connected) without crashing.
+        sync = self._sync_live_inbox()
+
+        # Step 1: Fetch the freshly-synced unread messages
         unread = self._fetch_unread_messages()
         self.logger.info("Fetched unread messages", count=len(unread))
 
         if not unread:
-            self.logger.info("No unread messages to process")
+            self.logger.info("No unread messages to process", sync_status=sync.get("status"))
+            note = {
+                "not_connected": "No Google account connected — visit /auth/google to let Omura read your inbox.",
+                "error": f"Couldn't reach Gmail: {sync.get('message', 'unknown error')}",
+            }.get(sync.get("status"), "Inbox is clear — no unread messages.")
             return {
                 "total_processed": 0,
                 "triaged": [],
                 "summaries": {},
                 "suggested_responses": {},
                 "urgent": [],
+                "sync_status": sync.get("status"),
+                "message": note,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -257,6 +268,7 @@ class InboxAI:
             "summaries": summaries,
             "suggested_responses": suggested_responses,
             "urgent": urgent,
+            "sync_status": sync.get("status"),
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -271,6 +283,23 @@ class InboxAI:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _sync_live_inbox(self) -> dict:
+        """Best-effort pull of live Gmail into the Communication table.
+
+        Delegates to the shared sync_gmail_inbox helper. Never raises — a
+        failure (no token, network) is logged and returned as a status so the
+        pipeline still runs against whatever is already stored.
+        """
+        try:
+            from backend.app.inbox_sync import sync_gmail_inbox
+            result = sync_gmail_inbox(self.db)
+            self.logger.info("Live inbox sync", status=result.get("status"),
+                             synced=result.get("synced", 0))
+            return result
+        except Exception as exc:
+            self.logger.warning("Live inbox sync failed", error=str(exc))
+            return {"status": "error", "synced": 0, "message": str(exc)}
 
     def _fetch_unread_messages(self) -> list[dict]:
         """Fetch unread messages from the real communications table."""

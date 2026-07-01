@@ -133,43 +133,57 @@ class OmuraLogger:
 
     # -- convenience wrappers ------------------------------------------------
 
-    def debug(self, message: str, **kwargs) -> None:
+    # NOTE: every wrapper accepts *args (printf-style or extra positionals) and
+    # **kwargs (structured fields). Logging must NEVER crash the caller — a bad
+    # log call previously raised TypeError and turned agent fallbacks into 500s.
+
+    def debug(self, message: str = "", *args, **kwargs) -> None:
         """Log a DEBUG-level message."""
-        self._emit(logging.DEBUG, message, **kwargs)
+        self._emit(logging.DEBUG, message, *args, **kwargs)
 
-    def info(self, message: str, **kwargs) -> None:
+    def info(self, message: str = "", *args, **kwargs) -> None:
         """Log an INFO-level message."""
-        self._emit(logging.INFO, message, **kwargs)
+        self._emit(logging.INFO, message, *args, **kwargs)
 
-    def warning(self, message: str, **kwargs) -> None:
+    def warning(self, message: str = "", *args, **kwargs) -> None:
         """Log a WARNING-level message."""
-        self._emit(logging.WARNING, message, **kwargs)
+        self._emit(logging.WARNING, message, *args, **kwargs)
 
-    def error(self, message: str, **kwargs) -> None:
+    def error(self, message: str = "", *args, **kwargs) -> None:
         """Log an ERROR-level message."""
-        self._emit(logging.ERROR, message, **kwargs)
+        self._emit(logging.ERROR, message, *args, **kwargs)
 
-    def critical(self, message: str, **kwargs) -> None:
+    def critical(self, message: str = "", *args, **kwargs) -> None:
         """Log a CRITICAL-level message."""
-        self._emit(logging.CRITICAL, message, **kwargs)
+        self._emit(logging.CRITICAL, message, *args, **kwargs)
 
     # -- internal ------------------------------------------------------------
 
-    def _emit(self, level: int, message: str, **kwargs) -> None:
-        """Write to the Python logger **and** store in the ring buffer."""
-        if kwargs:
-            context = " | ".join(f"{k}={v}" for k, v in kwargs.items())
-            message = f"{message} | {context}"
-        self._logger.log(level, message, extra={"agent_name": self.agent_name})
-        _store_entry(
-            self.agent_name,
-            {
-                "timestamp": datetime.now(timezone.utc).strftime(DATE_FORMAT),
-                "agent_name": self.agent_name,
-                "level": logging.getLevelName(level),
-                "message": message,
-            },
-        )
+    def _emit(self, level: int, message: str, *args, **kwargs) -> None:
+        """Write to the Python logger and the ring buffer. Never raises."""
+        try:
+            msg = str(message)
+            if args:
+                # Support printf-style ("...%s", val) and tolerate mismatches.
+                try:
+                    msg = msg % args
+                except Exception:
+                    msg = msg + " " + " ".join(str(a) for a in args)
+            if kwargs:
+                context = " | ".join(f"{k}={v}" for k, v in kwargs.items())
+                msg = f"{msg} | {context}"
+            self._logger.log(level, msg, extra={"agent_name": self.agent_name})
+            _store_entry(
+                self.agent_name,
+                {
+                    "timestamp": datetime.now(timezone.utc).strftime(DATE_FORMAT),
+                    "agent_name": self.agent_name,
+                    "level": logging.getLevelName(level),
+                    "message": msg,
+                },
+            )
+        except Exception:
+            pass  # logging must never crash the caller
 
 
 # ---------------------------------------------------------------------------

@@ -325,6 +325,23 @@
 .animate-enter { animation: omura-enter 0.2s ease forwards; }
 .animate-leave { animation: omura-leave 0.15s ease forwards; }
 
+/* ── Titan Track lesson reveals (segmenting + staggered diagrams) ── */
+@keyframes titan-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes titan-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.titan-step { animation: titan-fade 0.28s ease both; }
+.titan-rise { animation: titan-rise 0.42s ease both; }
+
+/* Accessibility: honor reduced-motion — show everything, animate nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .titan-step, .titan-rise { animation: none !important; }
+}
+
 /* Toast */
 .omura-toast {
   display: flex;

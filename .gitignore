@@ -44,3 +44,6 @@ logs/
 # Database
 *.db
 *.sqlite3
+
+# Local TTS engine binaries (re-downloadable)
+backend/tts_local/

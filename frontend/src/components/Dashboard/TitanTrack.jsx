@@ -122,6 +122,22 @@ const STATUS_META = {
 
 const SLOT_ICON = { morning: '🌅', afternoon: '☀️', evening: '🌙' };
 
+// Time-of-day framing for the "Now" card — which slot are we in right now.
+function greetingNow() {
+  const h = new Date().getHours();
+  if (h < 12) return { label: 'This morning', slot: 'morning', icon: '🌅' };
+  if (h < 17) return { label: 'This afternoon', slot: 'afternoon', icon: '☀️' };
+  return { label: 'Tonight', slot: 'evening', icon: '🌙' };
+}
+
+// Energy dose — the antidote to the motivation cycle. "Drained" doesn't mean
+// skip; it means a smaller pass that STILL keeps the chain alive. Never zero.
+const NOW_ENERGY = [
+  { key: 'high', label: 'Locked in', emoji: '🔥' },
+  { key: 'med',  label: 'Steady',    emoji: '⚡' },
+  { key: 'low',  label: 'Drained',   emoji: '🌙' },
+];
+
 // ════════════════════════════════════════════════════════════════
 // Shared bits
 // ════════════════════════════════════════════════════════════════
@@ -232,6 +248,106 @@ function StatHeader({ streak, xp, onOpenSchedule }) {
       <button className="btn btn-ghost" onClick={onOpenSchedule} title="Schedule settings" aria-label="Schedule settings">
         <FiSettings size={16} />
       </button>
+    </div>
+  );
+}
+
+// ── The one thing to do NOW — the frictionless daily home. ──
+// Removes choice (picks a single next lesson), doses it by energy, surfaces the
+// real-business artifact this rep ships, and frames the streak as a chain not to
+// break. This is the hero of the landing screen.
+function NowCard({ card, fullModule, streak, onStart }) {
+  const [energy, setEnergy] = useState(() => {
+    try { return localStorage.getItem('titan_energy_' + new Date().toDateString()) || 'med'; }
+    catch { return 'med'; }
+  });
+  const g = useMemo(greetingNow, []);
+  const setE = (k) => {
+    setEnergy(k);
+    try { localStorage.setItem('titan_energy_' + new Date().toDateString(), k); } catch { /* noop */ }
+  };
+
+  const m = card?.module;
+  const color = mute(m?.color_theme || TONES.ready);
+  const low = energy === 'low';
+  const days = streak?.current_streak || 0;
+  const artifact = fullModule?.culminating_artifact;
+  const cont = m?.status === 'in_progress';
+
+  if (!m) {
+    return (
+      <div className="glass-card" style={{ borderLeft: `4px solid ${TONES.ready}` }}>
+        <div style={{ fontSize: 13, color: '#A1A1AA', lineHeight: 1.6 }}>
+          <span style={{ fontSize: 15, marginRight: 6 }}>{g.icon}</span>
+          {g.label} — nothing queued yet. Set your daily times below, or pick a track to start now.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="glass-card" style={{ borderLeft: `4px solid ${color}`, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* greeting + streak spine */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#A1A1AA' }}>
+        <span style={{ fontSize: 15 }}>{g.icon}</span>
+        <span style={{ fontWeight: 700, color: '#E4E4E7' }}>{g.label}</span>
+        <span style={{ color: TONES.textFaint }}>·</span>
+        <span>Do this now</span>
+        {days > 0 && (
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, color: TONES.progress, fontWeight: 700 }}>
+            🔥 {days}-day streak
+          </span>
+        )}
+      </div>
+
+      {/* the one lesson */}
+      <div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: '#FAFAFA', lineHeight: 1.25 }}>{m.title}</div>
+        <div style={{ fontSize: 12, color: '#71717A', marginTop: 3 }}>{m.track_name}</div>
+      </div>
+
+      {/* real-business coupling — this isn't studying, it ships into the company */}
+      {artifact && (
+        <div className="glass-inner" style={{ padding: '10px 12px', borderLeft: `3px solid ${color}`, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <FiTarget size={14} style={{ color, marginTop: 2, flexShrink: 0 }} />
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#71717A', textTransform: 'uppercase', letterSpacing: '0.06em' }}>This rep ships</div>
+            <div style={{ fontSize: 13, color: '#D4D4D8', lineHeight: 1.5 }}>{artifact}</div>
+          </div>
+        </div>
+      )}
+
+      {/* energy dose */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: '#71717A' }}>Energy today:</span>
+        {NOW_ENERGY.map((e) => {
+          const on = energy === e.key;
+          return (
+            <button key={e.key} type="button" onClick={() => setE(e.key)} aria-pressed={on}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 999, fontSize: 12, cursor: 'pointer',
+                border: `1px solid ${on ? color : '#27272A'}`, background: on ? '#17171B' : 'transparent',
+                color: on ? '#FAFAFA' : '#A1A1AA', fontWeight: on ? 700 : 500 }}>
+              <span>{e.emoji}</span>{e.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* CTA + honest minimum */}
+      <div>
+        <button type="button" onClick={() => onStart(m.id)}
+          style={{ width: '100%', background: color, color: '#fff', border: 'none', borderRadius: 12, padding: '14px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <FiPlay size={16} />
+          {low ? 'Keep the chain alive — 5-min pass' : cont ? 'Continue the lesson' : 'Start now'}
+        </button>
+        <p style={{ fontSize: 11, color: '#71717A', textAlign: 'center', marginTop: 8, lineHeight: 1.55 }}>
+          {low
+            ? 'Drained is fine. Do the concept + the quick check — that still counts as a full streak day. Never zero.'
+            : days > 0
+              ? "Don't break the chain. One rep is all today asks."
+              : 'One rep. That is how the streak starts.'}
+        </p>
+      </div>
     </div>
   );
 }
@@ -480,6 +596,24 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
     s.push({ key: 'done', label: 'Done' });
     return s;
   }, [c]);
+
+  // Prefetch the current step's narration the moment it's shown, so hitting
+  // Listen plays instantly (cache-warm) instead of waiting ~8s for synthesis.
+  useEffect(() => {
+    if (!data) return;
+    const cur = steps[step];
+    if (!cur) return;
+    const he = c.historical_example;
+    const t = {
+      big_picture: c.big_picture,
+      concept: c.concept,
+      history: he ? `${he.figure}. ${he.story}${he.key_lesson ? ` The lesson: ${he.key_lesson}` : ''}` : '',
+      modern: c.modern_practice,
+      exercises: (c.exercises || []).map((e, i) => `${i + 1}. ${e.task}`).join(' '),
+      explain: c.explain_back_prompt,
+    }[cur.key] || '';
+    if (t) speech.prefetch(t);
+  }, [data, step, steps, c, speech.prefetch]);
 
   async function submitQuiz() {
     setGrading(true);
@@ -1409,28 +1543,48 @@ export default function TitanTrack() {
   const todayLessons = dash?.today_lessons || [];
   const activeProjects = projects.filter((p) => p.status === 'in_progress' || p.status === 'submitted');
 
+  // Pick the ONE thing to do now: prefer the in-progress lesson in the current
+  // time slot, else this slot's lesson, else any in-progress, else the first
+  // actionable one. Plain expressions (not hooks) — they sit after early returns.
+  const nowSlot = greetingNow().slot;
+  const actionableToday = todayLessons.filter((c) => c.module && c.module.status !== 'locked');
+  const nowCard =
+    actionableToday.find((c) => c.slot === nowSlot && c.module.status === 'in_progress') ||
+    actionableToday.find((c) => c.slot === nowSlot) ||
+    actionableToday.find((c) => c.module.status === 'in_progress') ||
+    actionableToday[0] || null;
+  const nowFull = nowCard ? modules.find((m) => m.id === nowCard.module.id) : null;
+  const laterCards = todayLessons.filter((c) => c !== nowCard && c.module);
+
   return (
     <div className="space-y-6">
       {/* Header: streak / XP / level */}
       <StatHeader streak={dash?.streak} xp={xp} onOpenSchedule={() => setShowSchedule(true)} />
 
-      {/* Today's lessons */}
+      {/* THE ONE THING TO DO NOW — hero of the screen */}
+      <NowCard card={nowCard} fullModule={nowFull} streak={dash?.streak} onStart={openLesson} />
+
+      {/* The rest of today + syllabus access */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 800, color: '#FAFAFA' }}>Today's lessons</h2>
+          <h2 style={{ fontSize: 15, fontWeight: 800, color: '#FAFAFA' }}>
+            {laterCards.length ? 'Later today' : 'Your day'}
+          </h2>
           <button className="btn btn-ghost" style={{ marginLeft: 'auto', fontSize: 12 }} onClick={() => setShowSyllabus(true)}>
             <FiList size={13} /> Full syllabus
           </button>
         </div>
-        {todayLessons.length > 0 ? (
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(todayLessons.length, 1)}, 1fr)`, gap: 14 }}>
-            {todayLessons.map((card, i) => <LessonCard key={i} card={card} onOpen={openLesson} />)}
+        {laterCards.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${laterCards.length}, 1fr)`, gap: 14 }}>
+            {laterCards.map((card, i) => <LessonCard key={i} card={card} onOpen={openLesson} />)}
           </div>
-        ) : (
+        ) : todayLessons.length === 0 ? (
           <button type="button" onClick={() => setShowSchedule(true)} className="glass-inner"
             style={{ width: '100%', textAlign: 'left', padding: 16, borderRadius: 14, cursor: 'pointer', color: '#A1A1AA', fontSize: 13, border: '1px dashed #2A2A30' }}>
             No lessons scheduled yet — tap to set your daily times, or pick a track below to start now.
           </button>
+        ) : (
+          <p style={{ fontSize: 12, color: '#71717A' }}>That's your focus for now. The next slot unlocks later today.</p>
         )}
       </div>
 

@@ -54,7 +54,9 @@ const SECTION_COMPONENTS = {
 
 export default function Dashboard() {
   const router = useRouter();
-  const [activeSection, setActiveSection] = useState('chat');
+  // Titan Track is home — open Omura and the one thing to do now is right there,
+  // no tab-hunting. (The chat is one click away via the floating bubble + sidebar.)
+  const [activeSection, setActiveSection] = useState('titan');
 
   // Honor ?section=… so returning from the /settings page lands on the right tab.
   useEffect(() => {

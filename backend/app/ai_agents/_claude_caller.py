@@ -9,17 +9,21 @@ per-call ``model`` argument (the Tutor uses Sonnet).
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import traceback
+import urllib.request
 from typing import Any, Optional
 
 from backend.app.config import settings
+from backend.app.ai_agents import ai_mode
 from backend.app.utils.logging import OmuraLogger
 
 _logger = OmuraLogger("ai_caller")
 
 ANTHROPIC_MODEL = settings.OMURA_WORKER_MODEL
+OLLAMA_MODEL = os.environ.get("OMURA_OLLAMA_MODEL", "qwen2.5:7b")
 
 # Lazy-initialized client
 _anthropic_client = None
@@ -81,6 +85,30 @@ def _call_anthropic(prompt: str, system_prompt: str, agent_name: str, temperatur
     return None
 
 
+def _call_ollama(prompt: str, system_prompt: str, agent_name: str, temperature: float, max_tokens: int) -> Optional[str]:
+    """Call the local Ollama model (fully offline, no internet). Raw text or None."""
+    url = settings.OLLAMA_BASE_URL.rstrip("/") + "/api/chat"
+    body = json.dumps({
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        # Generous timeout: a cold 7B on CPU can take ~30s on the first call
+        # (model load) before it's warm.
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return (data.get("message") or {}).get("content") or None
+    except Exception as exc:  # noqa: BLE001 — offline model unreachable → None
+        _logger.error(f"[{agent_name}] Ollama error: {exc}")
+        return None
+
+
 def call_claude(
     prompt: str,
     system_prompt: str,
@@ -93,12 +121,25 @@ def call_claude(
 
     ``model`` optionally overrides the default worker model (Haiku) for a single
     call — e.g. the Tutor uses Sonnet for richer lesson generation.
+
+    Routed by the runtime AI mode: 'online' → cloud Claude, 'offline' → local
+    Ollama model, 'auto' → cloud with an automatic local fallback.
     """
-    result = _call_anthropic(prompt, system_prompt, agent_name, temperature, max_tokens, model)
+    mode = ai_mode.get_mode()
+    if mode == "offline":
+        result = _call_ollama(prompt, system_prompt, agent_name, temperature, max_tokens)
+    elif mode == "online":
+        result = _call_anthropic(prompt, system_prompt, agent_name, temperature, max_tokens, model)
+    else:  # auto — prefer cloud, fall back to the local model when it's unreachable
+        result = _call_anthropic(prompt, system_prompt, agent_name, temperature, max_tokens, model)
+        if result is None:
+            _logger.warning(f"[{agent_name}] cloud unavailable — falling back to local model")
+            result = _call_ollama(prompt, system_prompt, agent_name, temperature, max_tokens)
+
     if result is not None:
-        _logger.debug(f"[{agent_name}] Claude call successful ({len(result)} chars)")
+        _logger.debug(f"[{agent_name}] AI call successful ({len(result)} chars, mode={mode})")
     else:
-        _logger.warning(f"[{agent_name}] Claude call returned no result")
+        _logger.warning(f"[{agent_name}] AI call returned no result (mode={mode})")
     return result
 
 

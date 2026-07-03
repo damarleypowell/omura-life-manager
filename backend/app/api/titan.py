@@ -849,6 +849,14 @@ def refresh_module_lesson(module_id: int, db: Session = Depends(get_db)):
 TTS_DEFAULT_VOICE = "en-US-AndrewNeural"
 TTS_MAX_CHARS = 1800  # one lesson step; keeps synthesis fast and bounded
 
+# Small in-memory cache of recently synthesized clips (voice+text -> mp3 bytes)
+# so replays / re-narrations are instant and we stop re-hitting (and re-
+# throttling) Microsoft's free endpoint. Bounded to keep memory flat.
+from collections import OrderedDict  # noqa: E402
+
+_TTS_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
+_TTS_CACHE_MAX = 512
+
 
 @router.post("/tts")
 async def titan_tts(data: TtsRequest):
@@ -869,20 +877,55 @@ async def titan_tts(data: TtsRequest):
         raise HTTPException(503, "Edge TTS is not installed on the server.")
 
     voice = (data.voice or TTS_DEFAULT_VOICE).strip() or TTS_DEFAULT_VOICE
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        audio = bytearray()
-        async for chunk in communicate.stream():
-            if chunk.get("type") == "audio" and chunk.get("data"):
-                audio.extend(chunk["data"])
-    except Exception as exc:  # noqa: BLE001 — any upstream failure → client fallback
-        raise HTTPException(502, f"Narration unavailable: {exc}")
-
-    if not audio:
-        raise HTTPException(502, "Narration produced no audio.")
 
     from fastapi import Response
-    return Response(content=bytes(audio), media_type="audio/mpeg",
+
+    # Cache hit → instant, no upstream call.
+    import hashlib
+    key = hashlib.sha1(f"{voice}\x00{text}".encode("utf-8")).hexdigest()
+    cached = _TTS_CACHE.get(key)
+    if cached is not None:
+        _TTS_CACHE.move_to_end(key)
+        return Response(content=cached, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+    # edge-tts streams from Microsoft's servers and occasionally drops or can't
+    # reach them (transient network / throttle) — the "works, then 502s"
+    # flakiness. One quick retry catches most drops; a short per-attempt timeout
+    # means a hung stream fails FAST so the client drops to the browser voice
+    # without a long silence. Only after both attempts fail do we 502.
+    import asyncio
+
+    async def _synthesize() -> bytearray:
+        buf = bytearray()
+        communicate = edge_tts.Communicate(text, voice)
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio" and chunk.get("data"):
+                buf.extend(chunk["data"])
+        return buf
+
+    audio = bytearray()
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            audio = await asyncio.wait_for(_synthesize(), timeout=6)
+            if audio:
+                break
+        except Exception as exc:  # noqa: BLE001 — incl. TimeoutError; retry then fall back
+            last_exc = exc
+            audio = bytearray()
+        if attempt < 1:
+            await asyncio.sleep(0.3)
+
+    if not audio:
+        raise HTTPException(502, f"Narration unavailable: {last_exc or 'no audio produced'}")
+
+    data_bytes = bytes(audio)
+    _TTS_CACHE[key] = data_bytes
+    _TTS_CACHE.move_to_end(key)
+    while len(_TTS_CACHE) > _TTS_CACHE_MAX:
+        _TTS_CACHE.popitem(last=False)
+
+    return Response(content=data_bytes, media_type="audio/mpeg",
                     headers={"Cache-Control": "no-store"})
 
 

@@ -418,6 +418,37 @@ def health():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 
+# ── AI mode: online (cloud Claude) / offline (local Ollama) / auto ──
+class AiModeRequest(BaseModel):
+    mode: str
+
+
+@app.get("/api/ai-mode")
+def get_ai_mode():
+    from backend.app.ai_agents import ai_mode as _ai_mode
+    import urllib.request as _u
+    local_up = False
+    try:
+        with _u.urlopen(settings.OLLAMA_BASE_URL.rstrip("/") + "/api/tags", timeout=2) as r:
+            local_up = getattr(r, "status", 200) == 200
+    except Exception:
+        local_up = False
+    return {
+        "mode": _ai_mode.get_mode(),
+        "cloud_configured": bool(settings.ANTHROPIC_API_KEY),
+        "local_available": local_up,
+    }
+
+
+@app.post("/api/ai-mode")
+def set_ai_mode(req: AiModeRequest):
+    from backend.app.ai_agents import ai_mode as _ai_mode
+    try:
+        return {"mode": _ai_mode.set_mode(req.mode)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ══════════════════════════════════════════════
 # Communications (Unified Inbox)
 # ══════════════════════════════════════════════

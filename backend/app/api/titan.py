@@ -150,11 +150,19 @@ def _pick_module_for_track(db: Session, track_code: Optional[str]) -> Optional[L
 
 def _get_or_create_project(db: Session, module: LearningModule) -> ModuleProject:
     """Return the module's project, generating its brief from the cached lesson
-    content the first time it is requested."""
+    content the first time it is requested. Projects only exist on build-
+    checkpoint modules (every 5th lesson + track capstone); asking for one on a
+    study-only lesson is a 409, not a silently fabricated project."""
     proj = db.query(ModuleProject).filter(ModuleProject.module_id == module.id).first()
     if proj:
         return proj
     tutor = TutorAI(db)
+    if not tutor.is_project_checkpoint(module):
+        raise HTTPException(
+            409,
+            "This is a study-only lesson — hands-on projects arrive at build "
+            "checkpoints (every 5th lesson in a track, plus the capstone).",
+        )
     content = tutor.generate_module_content(module.id)
     brief = (content or {}).get("project_brief") or tutor._fallback_project(module)
     proj = ModuleProject(module_id=module.id, brief=brief, completed_steps=[], status="available")

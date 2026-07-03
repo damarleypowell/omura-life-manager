@@ -37,8 +37,15 @@ QUIZ_PASS_THRESHOLD = 80
 # Lesson-content schema version. Bump when the generated_content shape changes
 # so previously-cached lessons (missing new fields) are regenerated on next view
 # instead of being served stale. v2 adds: big_picture, historical_example,
-# modern_practice, exercises, project_brief.
-CONTENT_SCHEMA_VERSION = 2
+# modern_practice, exercises, project_brief. v3 adds: chapters (deep ~2-hour
+# multi-chapter lessons with per-chapter figures/images/diagrams),
+# estimated_minutes, and projects only on every-5th-lesson checkpoints.
+CONTENT_SCHEMA_VERSION = 3
+
+# Hands-on projects are checkpoint events, not per-lesson homework: one build
+# every N lessons within a track (plus the track's final module as capstone).
+# In between, lessons go deeper instead — exercises stay, projects don't.
+PROJECT_EVERY_N_LESSONS = 5
 
 # The Tutor uses Sonnet (richer lesson generation) rather than the shared
 # Haiku default. Falls back to Gemini automatically if Anthropic is unavailable.
@@ -55,7 +62,13 @@ CONFIDENCE_NOTES = {
 
 def _frozen_content_for(module) -> Optional[Dict[str, Any]]:
     """Return the pre-authored, frozen lesson content for a module's phase_code,
-    if a baked course file exists. Safe no-op if the file isn't present yet."""
+    if a baked course file exists. Safe no-op if the file isn't present yet.
+
+    Entries baked under an older CONTENT_SCHEMA_VERSION are ignored so a schema
+    bump (e.g. v2 short lessons → v3 deep chapters) falls through to live AI
+    generation instead of serving the stale short shape forever. Re-run
+    ``python -m backend.bake_titan_content`` to refreeze the course at v3.
+    """
     if not module or not getattr(module, "phase_code", None):
         return None
     try:
@@ -63,7 +76,11 @@ def _frozen_content_for(module) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     entry = TITAN_CONTENT.get(module.phase_code)
-    return dict(entry) if isinstance(entry, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    if int(entry.get("_schema_version", 2)) < CONTENT_SCHEMA_VERSION:
+        return None  # baked with an older schema — regenerate live
+    return dict(entry)
 
 
 class TutorAI:
@@ -180,7 +197,10 @@ class TutorAI:
         if cached and not force and cached.get("_schema_version") == CONTENT_SCHEMA_VERSION:
             return cached
 
-        num_questions = 3 if light else 4
+        # 5 on light days so the 80% gate is reachable without perfection (4/5);
+        # 6 standard (5/6 passes). A 4-question quiz would demand 100%.
+        num_questions = 5 if light else 6
+        has_project = self.is_project_checkpoint(module)
 
         # Prefer pre-authored, frozen course content (baked once into
         # titan_content.py — see scripts/bake_titan_content.py). Lessons are then
@@ -194,9 +214,15 @@ class TutorAI:
             content.setdefault("confidence_level", module.confidence_level)
             content.setdefault("confidence_note",
                                module.confidence_note or CONFIDENCE_NOTES.get(module.confidence_level, ""))
+            # The project cadence is a curriculum rule, not baked data — apply it
+            # even to frozen entries so re-ordering tracks stays consistent.
+            if not has_project:
+                content["project_brief"] = None
+            elif not content.get("project_brief"):
+                content["project_brief"] = self._fallback_project(module)
         else:
-            content = self._ai_generate_content(module, num_questions)
-            content = self._structural_validate(content, module, num_questions)
+            content = self._ai_generate_content(module, num_questions, has_project)
+            content = self._structural_validate(content, module, num_questions, has_project)
 
         # Persist a quality-check record (Layer 1 result; Layer 2 judge optional)
         try:
@@ -387,6 +413,23 @@ class TutorAI:
             .first()
         )
 
+    def is_project_checkpoint(self, module: LearningModule) -> bool:
+        """True when this module is a build checkpoint: every Nth lesson within
+        its track (1-based by order_index), plus the track's final module
+        (capstone). All other lessons are study-only — deeper content, no project."""
+        siblings = (
+            self.db.query(LearningModule.id)
+            .filter(LearningModule.track_id == module.track_id)
+            .order_by(LearningModule.order_index, LearningModule.id)
+            .all()
+        )
+        ids = [row[0] for row in siblings]
+        try:
+            pos = ids.index(module.id) + 1
+        except ValueError:
+            return True  # unknown position — keep the project rather than lose it
+        return pos % PROJECT_EVERY_N_LESSONS == 0 or pos == len(ids)
+
     def _session_shape(self, energy_level: Optional[str]) -> str:
         """'light' (review-leaning) vs 'standard', from energy + business load."""
         if energy_level == "low":
@@ -451,14 +494,69 @@ class TutorAI:
 
     # ── Internal: structural QA (Layer 1) ───────────────────────────
 
+    @staticmethod
+    def _clean_chapters(raw: Any) -> List[Dict[str, Any]]:
+        """Normalize the chapters array: keep only well-formed chapters with a
+        real body; coerce optional figure/diagram/image_topic to safe shapes."""
+        if not isinstance(raw, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for ch in raw:
+            if not isinstance(ch, dict):
+                continue
+            body = str(ch.get("body") or "").strip()
+            if len(body.split()) < 40:  # a "chapter" under 40 words is filler
+                continue
+            clean: Dict[str, Any] = {
+                "title": str(ch.get("title") or f"Part {len(out) + 1}").strip()[:80],
+                "body": body,
+                "key_takeaway": str(ch.get("key_takeaway") or "").strip() or None,
+            }
+            fig = ch.get("figure")
+            if isinstance(fig, dict) and str(fig.get("name") or "").strip():
+                clean["figure"] = {
+                    "name": str(fig.get("name")).strip(),
+                    "era": str(fig.get("era") or "").strip(),
+                    "caption": str(fig.get("caption") or "").strip(),
+                }
+            topic = str(ch.get("image_topic") or "").strip()
+            if topic:
+                clean["image_topic"] = topic
+            dg = ch.get("diagram")
+            if isinstance(dg, dict) and (dg.get("nodes") or dg.get("columns")):
+                clean["diagram"] = dg
+            out.append(clean)
+        return out
+
     def _structural_validate(self, content: Dict[str, Any], module: LearningModule,
-                             num_questions: int) -> Dict[str, Any]:
+                             num_questions: int, has_project: bool = True) -> Dict[str, Any]:
         """Reject/repair generated content missing required components. A
         genuinely lazy generation skips or genericizes one of these fields."""
         reasons: List[str] = []
         content = dict(content or {})
 
-        if not (content.get("concept") or "").strip():
+        # v3 deep lessons: an ordered chapters array is the heart of the lesson.
+        # When present and substantial we don't require the legacy short-form
+        # prose fields; when the AI failed (offline fallback), the legacy fields
+        # below still assemble a complete short lesson.
+        raw_chapters = content.get("chapters")
+        chapters = self._clean_chapters(raw_chapters)
+        deep = len(chapters) >= 3
+        if deep:
+            content["chapters"] = chapters
+        else:
+            content.pop("chapters", None)
+            if raw_chapters:  # AI attempted chapters but produced < 3 usable ones
+                reasons.append("fewer than 3 usable chapters — served legacy short lesson")
+
+        try:
+            content["estimated_minutes"] = max(15, min(180, int(content.get("estimated_minutes", 0))))
+        except (TypeError, ValueError):
+            content["estimated_minutes"] = 0
+        if not content["estimated_minutes"]:
+            content["estimated_minutes"] = 110 if deep else 30
+
+        if not deep and not (content.get("concept") or "").strip():
             reasons.append("missing concept explanation")
             content["concept"] = self._fallback_concept(module)
 
@@ -468,15 +566,16 @@ class TutorAI:
                 "Learn it well and it compounds."
             )
 
-        he = content.get("historical_example")
-        if not isinstance(he, dict) or not (he.get("story") or "").strip():
-            content["historical_example"] = self._fallback_historical(module)
+        if not deep:
+            he = content.get("historical_example")
+            if not isinstance(he, dict) or not (he.get("story") or "").strip():
+                content["historical_example"] = self._fallback_historical(module)
 
-        if not (content.get("modern_practice") or "").strip():
-            content["modern_practice"] = (
-                "Today, applying this means turning the principle into one concrete move in your "
-                "agency or finance work this week — small, real, and observable."
-            )
+            if not (content.get("modern_practice") or "").strip():
+                content["modern_practice"] = (
+                    "Today, applying this means turning the principle into one concrete move in your "
+                    "agency or finance work this week — small, real, and observable."
+                )
 
         ex = content.get("exercises")
         if not isinstance(ex, list) or not ex:
@@ -488,25 +587,32 @@ class TutorAI:
                 for e in ex if isinstance(e, dict)
             ] or self._fallback_exercises(module)
 
-        pb = content.get("project_brief")
-        if not isinstance(pb, dict) or not (pb.get("title") or "").strip() or not isinstance(pb.get("steps"), list) or not pb.get("steps"):
-            content["project_brief"] = self._fallback_project(module)
+        # Projects are checkpoint-only (every Nth lesson + capstone). Non-
+        # checkpoint lessons must NOT carry one, even if the AI volunteered it.
+        if not has_project:
+            content["project_brief"] = None
         else:
-            # Ensure required project fields exist.
-            pb.setdefault("description", module.description or "Build something that proves the skill.")
-            pb.setdefault("starter_code", None)
-            pb.setdefault("estimated_hours", 3)
-            pb.setdefault("submission_format", "writing")
-            if not isinstance(pb.get("rubric"), list) or not pb["rubric"]:
-                pb["rubric"] = [
-                    {"criterion": "Completeness", "max_points": 40},
-                    {"criterion": "Correctness / soundness", "max_points": 35},
-                    {"criterion": "Clarity of explanation", "max_points": 25},
-                ]
-            content["project_brief"] = pb
+            pb = content.get("project_brief")
+            if not isinstance(pb, dict) or not (pb.get("title") or "").strip() or not isinstance(pb.get("steps"), list) or not pb.get("steps"):
+                content["project_brief"] = self._fallback_project(module)
+            else:
+                # Ensure required project fields exist.
+                pb.setdefault("description", module.description or "Build something that proves the skill.")
+                pb.setdefault("starter_code", None)
+                pb.setdefault("estimated_hours", 3)
+                pb.setdefault("submission_format", "writing")
+                if not isinstance(pb.get("rubric"), list) or not pb["rubric"]:
+                    pb["rubric"] = [
+                        {"criterion": "Completeness", "max_points": 40},
+                        {"criterion": "Correctness / soundness", "max_points": 35},
+                        {"criterion": "Clarity of explanation", "max_points": 25},
+                    ]
+                content["project_brief"] = pb
 
         diagram = content.get("diagram")
-        if not isinstance(diagram, dict) or not (diagram.get("nodes") or diagram.get("columns")):
+        has_top_diagram = isinstance(diagram, dict) and (diagram.get("nodes") or diagram.get("columns"))
+        chapter_diagrams = deep and any(ch.get("diagram") for ch in chapters)
+        if not has_top_diagram and not chapter_diagrams:
             reasons.append("missing or empty diagram")
             content["diagram"] = self._fallback_diagram(module)
 
@@ -541,27 +647,49 @@ class TutorAI:
 
     # ── Internal: AI calls (each with deterministic fallback) ───────
 
-    def _ai_generate_content(self, module: LearningModule, num_questions: int) -> Dict[str, Any]:
+    def _ai_generate_content(self, module: LearningModule, num_questions: int,
+                             has_project: bool = True) -> Dict[str, Any]:
         system = (
             "You are the Tutor AI for Omura's Titan Track — a world-class teacher who makes hard "
-            "ideas easy. You teach the way Robert Greene does: state the concept in plain language, "
-            "then bring it to life with ONE specific historical figure and moment, then show what it "
-            "looks like in the learner's world today. Take inspiration from the best courses on earth "
-            "(fast.ai's learn-by-building, 3Blue1Brown's intuition-before-symbols, Harvard Business "
-            "School cases, Masterclass storytelling). You generate ONE module's full lesson + a real "
-            "hands-on project. Ground everything in the module's specific research_basis; never drift "
-            "to generic claims the citation does not support. If confidence is CONTESTED or "
-            "THEORETICAL, communicate that uncertainty honestly. Tie examples to the learner's real "
-            "context (IronLogic AI agency, Gotham Financial, boxing) only where it maps naturally. "
-            "Use plain, concrete language a smart 16-year-old could follow. Respond with valid JSON only."
+            "ideas easy. You are writing ONE deep, self-contained ~2-hour masterclass lesson, built "
+            "as a sequence of chapters the learner moves through like a great documentary: hook, "
+            "mechanism, history, failure case, evidence and limits, application. You teach the way "
+            "Robert Greene writes and 3Blue1Brown explains: intuition before jargon, one vivid "
+            "specific story per idea, and the shape of the idea made visible in a diagram. Take "
+            "inspiration from fast.ai (learn by doing), Harvard Business School cases (decisions "
+            "under uncertainty), and Masterclass (storytelling). Ground everything in the module's "
+            "specific research_basis; never drift to generic claims the citation does not support. "
+            "If confidence is CONTESTED or THEORETICAL, communicate that uncertainty honestly. Tie "
+            "examples to the learner's real context (IronLogic AI agency, Gotham Financial, boxing) "
+            "only where it maps naturally. Plain, concrete language a smart 16-year-old could follow. "
+            "Respond with valid JSON only."
         )
         ff = ""
         if module.requires_failure_twin:
             ff = (
-                " This is a 'study the greats' / case-study module: the content, quiz, and the "
-                "historical example MUST cover a failure twin (someone who did the same and failed) "
-                "and the luck/timing factors, not just the winner's tactics."
+                " This is a 'study the greats' / case-study module: the chapters and quiz MUST cover "
+                "a failure twin (someone who did the same and failed) and the luck/timing factors, "
+                "not just the winner's tactics."
             )
+        project_spec = (
+            '  "project_brief": {\n'
+            '     "title": "name of a real thing to build/do (<= 10 words)",\n'
+            '     "description": "2-4 sentences on what they will produce and why it cements the skill",\n'
+            '     "steps": [{"title": "<= 8 words", "detail": "<= 30 words", "minutes": 45}],  // 4-6 steps\n'
+            '     "starter_code": "a short code scaffold if this is a coding project, else null",\n'
+            '     "rubric": [{"criterion": "<= 8 words", "max_points": 25}],  // 3-4 criteria summing to ~100\n'
+            '     "estimated_hours": 4,\n'
+            '     "submission_format": "code|writing|log|recording|negotiation_sim"\n'
+            '  },\n'
+        ) if has_project else ""
+        project_rule = (
+            "This lesson is a BUILD CHECKPOINT: the project must produce a REAL artifact (working "
+            "code, a written analysis, a tracked log, a recording, or a simulation), ambitious enough "
+            "for its estimated_hours, and it should draw on the last few lessons, not just this one. "
+            "For Track C presence/negotiation modules prefer submission_format 'negotiation_sim' or 'recording'. "
+        ) if has_project else (
+            "Do NOT include a project_brief — this lesson is study-only; the build checkpoint comes later in the track. "
+        )
         prompt = (
             f"Module: {module.title}\n"
             f"Description: {module.description or ''}\n"
@@ -570,38 +698,40 @@ class TutorAI:
             f"Format: {module.format}.{ff}\n\n"
             f"Produce JSON with EXACTLY these keys:\n"
             '{\n'
-            '  "big_picture": "1 short paragraph (<= 55 words): what this is and why it matters to an ambitious founder — the hook",\n'
-            '  "concept": "2-3 SHORT paragraphs (<= 110 words total), separated by a blank line, plain language grounded in the citation",\n'
-            '  "historical_example": {"figure": "one specific real, well-known person (so a portrait exists)", "era": "<= 6 words",\n'
-            '     "story": "a concrete 50-85 word story of what they actually did", "key_lesson": "<= 22 words pulling out the principle"},\n'
-            '  "modern_practice": "1 paragraph (<= 70 words): exactly what applying this looks like for the learner TODAY (agency/finance/leadership)",\n'
-            '  "diagram": {"type": "flow|comparison|cycle", "title": "<= 8 words",\n'
-            '     "nodes": ["step 1","step 2",...]   // 3-5 short items, for flow/cycle\n'
-            '     OR "columns": [{"label":"A","points":["..."]},{"label":"B","points":["..."]}] // for comparison },\n'
-            '  "exercises": [{"task": "concrete thing to do right now (<= 22 words)", "minutes": 10}],  // 2-3 items\n'
-            f'  "quiz": [{{"question": "<= 25 words", "options": ["a","b","c","d"], "objective": "<= 12 words"}}]  // exactly {num_questions} items,\n'
+            '  "big_picture": "1 paragraph (60-90 words): what this is, why it matters to an ambitious founder, and what the next ~2 hours will build — the hook",\n'
+            '  "estimated_minutes": 110,  // honest total for a focused learner incl. exercises\n'
+            '  "chapters": [  // EXACTLY 5-7 chapters, ordered — the heart of the lesson\n'
+            '    {\n'
+            '      "title": "<= 8 words",\n'
+            '      "body": "300-450 words in 4-7 short paragraphs separated by blank lines. Teach, don\'t summarize: open with a concrete scene or question, build the mechanism step by step, use numbers and named examples, close by connecting to the next chapter.",\n'
+            '      "figure": {"name": "a real, famous, nameable person (one with a Wikipedia portrait)", "era": "<= 6 words", "caption": "<= 30 words on the specific thing they did"} or null,\n'
+            '      "image_topic": "exact English Wikipedia article title whose lead image would illustrate this chapter (a place, event, artifact, or concept — not a person)" or null,\n'
+            '      "diagram": {"type": "flow|comparison|cycle", "title": "<= 8 words",\n'
+            '         "nodes": ["step 1","step 2",...]   // 3-6 short items, for flow/cycle\n'
+            '         OR "columns": [{"label":"A","points":["..."]},{"label":"B","points":["..."]}] // for comparison } or null,\n'
+            '      "key_takeaway": "<= 22 words — the one sentence they must retain"\n'
+            '    }\n'
+            '  ],\n'
+            '  "exercises": [{"task": "concrete thing to do right now (<= 25 words)", "minutes": 20}],  // 3-5 items, 15-30 min each — real practice, not reflection filler\n'
+            f'  "quiz": [{{"question": "<= 28 words", "options": ["a","b","c","d"], "objective": "<= 12 words"}}],  // exactly {num_questions} items spread across the chapters\n'
             '  "answer_key": [{"answer_index": 0, "explanation": "<= 25 words"}],  // one per quiz item, same order\n'
             '  "explain_back_prompt": "one specific prompt (<= 30 words) asking the learner to explain THIS concept",\n'
-            '  "project_brief": {\n'
-            '     "title": "name of a real thing to build/do (<= 10 words)",\n'
-            '     "description": "2-4 sentences on what they will produce and why it cements the skill",\n'
-            '     "steps": [{"title": "<= 8 words", "detail": "<= 30 words", "minutes": 30}],  // 3-5 steps\n'
-            '     "starter_code": "a short code scaffold if this is a coding project, else null",\n'
-            '     "rubric": [{"criterion": "<= 8 words", "max_points": 25}],  // 3-4 criteria summing to ~100\n'
-            '     "estimated_hours": 3,\n'
-            '     "submission_format": "code|writing|log|recording|negotiation_sim"\n'
-            '  },\n'
+            f'{project_spec}'
             '  "citation": "the specific source(s) this rests on"\n'
             '}\n'
-            "RULES: Write tight — short, concrete sentences, no filler or throat-clearing; respect every word cap above. "
-            "The historical example must be a real, famous, nameable person (one with a known portrait) doing a specific thing — not a vague archetype. "
-            "Quiz questions must test the learning objective, not trivia; each needs 3-4 plausible options (<= 15 words each). "
-            "The project must produce a REAL artifact (working code, a written analysis, a tracked log, a recording, or a simulation), "
-            "sized to its estimated_hours. For Track C presence/negotiation modules prefer submission_format 'negotiation_sim' or 'recording'. "
-            "Output ONLY the JSON object — no preamble, no markdown fence, no commentary. Keep it compact so it is complete and valid."
+            "CHAPTER ARC (adapt, don't force): 1 the hook — a real moment where this mattered; 2 the core mechanism; "
+            "3 deep history — one figure who embodied it; 4 the failure case / where it breaks; 5 the evidence and its limits; "
+            "6 the playbook — applying it in the learner's world this week; optional 7 drills to make it stick.\n"
+            "VISUAL RULES: at least 2 chapters must include a figure (real person, portrait exists on Wikipedia — use the exact "
+            "name of their English Wikipedia article); at least 2 chapters must include a diagram; at least 1 chapter should "
+            "include an image_topic. Never invent people. Spread visuals across chapters — no chapter needs more than one.\n"
+            "WRITING RULES: concrete sentences, zero filler or throat-clearing; every paragraph earns its place. "
+            "Quiz questions must test understanding and application, not trivia; each needs 3-4 plausible options (<= 15 words each). "
+            f"{project_rule}"
+            "Output ONLY the JSON object — no preamble, no markdown fence, no commentary. Ensure the JSON is complete and valid."
         )
         result = call_claude_json(prompt, system, agent_name="tutor_ai",
-                                  temperature=0.45, max_tokens=6500, model=TUTOR_MODEL)
+                                  temperature=0.45, max_tokens=16000, model=TUTOR_MODEL)
         if not isinstance(result, dict):
             return {}
 

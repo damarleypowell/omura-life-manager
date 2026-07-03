@@ -236,9 +236,10 @@ export const titan = {
   reflect: (id, reflection, avoidedMoments) =>
     api.post(`/api/titan/reps/${id}/reflect`, { reflection, avoided_moments: avoidedMoments }),
   syncReps: () => api.post('/api/titan/reps/sync'),
-  // Daily session
+  // Daily session — first call of the day may author a full deep lesson
+  // (several minutes of Sonnet output), so it gets a long timeout.
   getTodaySession: (energyLevel) =>
-    api.get('/api/titan/session/today', { params: { energy_level: energyLevel } }),
+    api.get('/api/titan/session/today', { params: { energy_level: energyLevel }, timeout: 300000 }),
   startSession: (id, energyLevel) =>
     api.post(`/api/titan/session/${id}/start`, { energy_level: energyLevel }),
   completeSession: (id, minutesSpent = 0) =>
@@ -254,10 +255,11 @@ export const titan = {
   saveSnapshot: (changeNote, compassNote) =>
     api.post('/api/titan/roadmap/snapshot', { change_note: changeNote, compass_note: compassNote }),
   roadmapHistory: () => api.get('/api/titan/roadmap/history'),
-  // Lesson (full Robert-Greene-style content for one module)
-  getLesson: (moduleId) => api.get(`/api/titan/modules/${moduleId}/lesson`),
+  // Lesson (full deep multi-chapter lesson for one module). A cold generation
+  // writes ~2 hours of course material — allow up to 5 minutes; cached after.
+  getLesson: (moduleId) => api.get(`/api/titan/modules/${moduleId}/lesson`, { timeout: 300000 }),
   // Opt-in: ask the AI to re-author this lesson (near-term modules only)
-  refreshLesson: (moduleId) => api.post(`/api/titan/modules/${moduleId}/refresh`),
+  refreshLesson: (moduleId) => api.post(`/api/titan/modules/${moduleId}/refresh`, {}, { timeout: 300000 }),
   // Narration: returns raw mp3 bytes (ArrayBuffer) for the Listen button.
   tts: (text, voice) =>
     api.post('/api/titan/tts', { text, voice }, { responseType: 'arraybuffer' }),

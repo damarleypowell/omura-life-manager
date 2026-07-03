@@ -13,7 +13,7 @@
  *   Test       — weekly/monthly review, graded per track.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FiZap, FiStar, FiAward, FiLock, FiCheck, FiCheckCircle, FiPlay, FiArrowRight,
   FiArrowLeft, FiX, FiTarget, FiRefreshCw, FiBookOpen, FiClock, FiSettings,
@@ -42,32 +42,44 @@ function NarrateButton({ text, speech, label = 'Listen', style }) {
   );
 }
 
-// Real photo/painting of a named historical figure, pulled from Wikipedia
-// (free, no key). Falls back to a calm initials badge if there's no image.
-const _portraitCache = new Map();
-function FigurePortrait({ name, size = 72 }) {
-  const [src, setSrc] = useState(() => (_portraitCache.has(name) ? _portraitCache.get(name) : undefined));
+// Free Wikipedia imagery (no key): one summary fetch per title, cached, shared
+// by portraits (people) and topic banners (places/events/artifacts).
+// undefined = loading, null = no image, object = { thumb, original, description }.
+const _wikiCache = new Map();
+function useWikiImage(title) {
+  const [img, setImg] = useState(() => (_wikiCache.has(title) ? _wikiCache.get(title) : undefined));
   useEffect(() => {
-    if (!name || src !== undefined) return;
+    if (!title || img !== undefined) return;
     let alive = true;
     (async () => {
       try {
         const r = await fetch(
-          `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(name)}`,
+          `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`,
           { headers: { Accept: 'application/json' } }
         );
         if (!r.ok) throw new Error('no page');
         const j = await r.json();
-        const url = j?.thumbnail?.source || j?.originalimage?.source || null;
-        _portraitCache.set(name, url);
-        if (alive) setSrc(url);
+        const thumb = j?.thumbnail?.source || j?.originalimage?.source || null;
+        const val = thumb
+          ? { thumb, original: j?.originalimage?.source || thumb, description: j?.description || '' }
+          : null;
+        _wikiCache.set(title, val);
+        if (alive) setImg(val);
       } catch {
-        _portraitCache.set(name, null);
-        if (alive) setSrc(null);
+        _wikiCache.set(title, null);
+        if (alive) setImg(null);
       }
     })();
     return () => { alive = false; };
-  }, [name, src]);
+  }, [title, img]);
+  return img;
+}
+
+// Real photo/painting of a named historical figure, pulled from Wikipedia
+// (free, no key). Falls back to a calm initials badge if there's no image.
+function FigurePortrait({ name, size = 72 }) {
+  const img = useWikiImage(name);
+  const src = img === undefined ? undefined : (img?.thumb || null);
 
   const initials = (name || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   const box = {
@@ -89,6 +101,25 @@ function FigurePortrait({ name, size = 72 }) {
       background: 'linear-gradient(145deg, #16161A, #0D0D0F)' }}>
       {src === undefined ? '' : initials}
     </div>
+  );
+}
+
+// Wide illustrative banner for a chapter — a place, event, or artifact from
+// Wikipedia. Renders nothing at all if the topic has no usable image, so a bad
+// topic never leaves a hole in the lesson.
+function TopicImage({ topic }) {
+  const img = useWikiImage(topic);
+  if (!img?.original) return null;
+  return (
+    <figure style={{ margin: '0 0 14px' }}>
+      <div style={{ borderRadius: 12, overflow: 'hidden', border: `1px solid ${TONES.line}`, background: '#0D0D0F' }}>
+        <img src={img.original} alt={topic} loading="lazy"
+          style={{ width: '100%', maxHeight: 240, objectFit: 'cover', display: 'block' }} />
+      </div>
+      <figcaption style={{ fontSize: 11, color: TONES.textFaint, marginTop: 6 }}>
+        {topic}{img.description ? ` — ${img.description}` : ''} · Wikipedia
+      </figcaption>
+    </figure>
   );
 }
 
@@ -581,39 +612,79 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   const c = data?.content || {};
   const module = data?.module || {};
 
+  // v3 deep lessons carry an ordered chapters array (each ~a chapter of a
+  // masterclass, with optional portrait / image / diagram). Older cached and
+  // fallback lessons keep the legacy concept→history→modern shape.
+  const chapters = useMemo(
+    () => (Array.isArray(c.chapters) ? c.chapters.filter((ch) => ch && (ch.body || '').trim()) : []),
+    [c]
+  );
+
   const steps = useMemo(() => {
-    const s = [
-      { key: 'big_picture', label: 'Big picture' },
-      { key: 'concept', label: 'The concept' },
-      { key: 'history', label: 'Through history' },
-      { key: 'modern', label: 'In your world' },
-    ];
+    const s = [{ key: 'big_picture', label: 'Big picture' }];
     const dg = c.diagram;
-    if (dg && (dg.nodes?.length || dg.columns?.length)) s.push({ key: 'diagram', label: 'Visual' });
+    const hasTopDiagram = dg && (dg.nodes?.length || dg.columns?.length);
+    if (chapters.length) {
+      chapters.forEach((ch, i) => s.push({ key: `chapter_${i}`, label: ch.title || `Part ${i + 1}`, ci: i }));
+      // Only add a separate Visual step if no chapter already carries a diagram.
+      if (hasTopDiagram && !chapters.some((ch) => ch.diagram)) s.push({ key: 'diagram', label: 'Visual' });
+    } else {
+      s.push({ key: 'concept', label: 'The concept' });
+      s.push({ key: 'history', label: 'Through history' });
+      s.push({ key: 'modern', label: 'In your world' });
+      if (hasTopDiagram) s.push({ key: 'diagram', label: 'Visual' });
+    }
     if ((c.exercises || []).length) s.push({ key: 'exercises', label: 'Your exercise' });
     s.push({ key: 'quiz', label: 'Quiz' });
     s.push({ key: 'explain', label: 'Explain it back' });
     s.push({ key: 'done', label: 'Done' });
     return s;
-  }, [c]);
+  }, [c, chapters]);
 
-  // Prefetch the current step's narration the moment it's shown, so hitting
-  // Listen plays instantly (cache-warm) instead of waiting ~8s for synthesis.
-  useEffect(() => {
-    if (!data) return;
-    const cur = steps[step];
-    if (!cur) return;
+  // One source of truth for what the Listen button reads on each step.
+  const textForStep = useCallback((stepObj) => {
+    if (!stepObj) return '';
+    if (stepObj.key.startsWith('chapter_')) {
+      const ch = chapters[stepObj.ci];
+      if (!ch) return '';
+      return `${ch.title ? `${ch.title}. ` : ''}${ch.body}${ch.key_takeaway ? ` The takeaway: ${ch.key_takeaway}` : ''}`;
+    }
     const he = c.historical_example;
-    const t = {
+    return {
       big_picture: c.big_picture,
       concept: c.concept,
       history: he ? `${he.figure}. ${he.story}${he.key_lesson ? ` The lesson: ${he.key_lesson}` : ''}` : '',
       modern: c.modern_practice,
       exercises: (c.exercises || []).map((e, i) => `${i + 1}. ${e.task}`).join(' '),
       explain: c.explain_back_prompt,
-    }[cur.key] || '';
+    }[stepObj.key] || '';
+  }, [c, chapters]);
+
+  // Prefetch the current step's narration the moment it's shown, so hitting
+  // Listen plays instantly (cache-warm) instead of waiting ~8s for synthesis.
+  useEffect(() => {
+    if (!data) return;
+    const t = textForStep(steps[step]);
     if (t) speech.prefetch(t);
-  }, [data, step, steps, c, speech.prefetch]);
+  }, [data, step, steps, textForStep, speech.prefetch]);
+
+  // A ~2-hour lesson rarely finishes in one sitting — remember where you were
+  // and reopen there. Cleared once the lesson reaches Done.
+  useEffect(() => {
+    if (!data) return;
+    try {
+      const saved = parseInt(localStorage.getItem(`titan_step_${moduleId}`), 10);
+      if (saved > 0) setStep(Math.min(saved, Math.max(0, steps.length - 2)));
+    } catch { /* noop */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+  useEffect(() => {
+    if (!data) return;
+    try {
+      if (steps[step]?.key === 'done') localStorage.removeItem(`titan_step_${moduleId}`);
+      else localStorage.setItem(`titan_step_${moduleId}`, String(step));
+    } catch { /* noop */ }
+  }, [data, step, steps, moduleId]);
 
   async function submitQuiz() {
     setGrading(true);
@@ -641,7 +712,8 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   async function finishLesson() {
     if (finishedRef.current) return;  // idempotent — one check-in per lesson, no double-counting
     finishedRef.current = true;
-    try { await titan.checkin(moduleId, 30); } catch (e) { console.warn('Streak check-in failed (best-effort):', e); }
+    const mins = Math.max(15, Math.min(180, Number(c.estimated_minutes) || 30));
+    try { await titan.checkin(moduleId, mins); } catch (e) { console.warn('Streak check-in failed (best-effort):', e); }
     onProgress?.();
   }
 
@@ -650,6 +722,7 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
     setError('');
     try {
       const res = await titan.refreshLesson(moduleId);
+      try { localStorage.removeItem(`titan_step_${moduleId}`); } catch { /* noop */ }
       setData(res);
       setStep(0);
       setChoices({}); setQuizResult(null); setQuizPassed(!!res.quiz_passed);
@@ -663,7 +736,17 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   }
 
   if (loading) {
-    return <Overlay onClose={onClose}><div className="glass-card"><div className="skeleton" style={{ height: 320, borderRadius: 12 }} /></div></Overlay>;
+    return (
+      <Overlay onClose={onClose}>
+        <div className="glass-card">
+          <div className="skeleton" style={{ height: 320, borderRadius: 12 }} />
+          <p style={{ fontSize: 12, color: '#71717A', textAlign: 'center', marginTop: 12, lineHeight: 1.6 }}>
+            Opening your lesson… the first open of a deep lesson is authored fresh by the AI and can
+            take a minute or two. It's instant after that.
+          </p>
+        </div>
+      </Overlay>
+    );
   }
   if (error && !data) {
     return <Overlay onClose={onClose}><div className="glass-card" style={{ textAlign: 'center', padding: 30 }}>
@@ -677,15 +760,8 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
   const canAdvance = cur.key === 'quiz' ? quizPassed : true;
 
   // What the Listen button reads for the current step (the prose steps only).
-  const he = c.historical_example;
-  const stepText = {
-    big_picture: c.big_picture,
-    concept: c.concept,
-    history: he ? `${he.figure}. ${he.story}${he.key_lesson ? ` The lesson: ${he.key_lesson}` : ''}` : '',
-    modern: c.modern_practice,
-    exercises: (c.exercises || []).map((e, i) => `${i + 1}. ${e.task}`).join(' '),
-    explain: c.explain_back_prompt,
-  }[cur.key] || '';
+  const stepText = textForStep(cur);
+  const curChapter = cur.key.startsWith('chapter_') ? chapters[cur.ci] : null;
 
   return (
     <Overlay onClose={onClose}>
@@ -696,6 +772,11 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
             <FiBookOpen style={{ color: TONES.ready }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: '#FAFAFA' }}>{module.title}</span>
             <ConfidenceTag level={module.confidence_level} />
+            {c.estimated_minutes > 0 && (
+              <span style={{ fontSize: 11, color: '#71717A', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <FiClock size={11} /> ≈{c.estimated_minutes} min
+              </span>
+            )}
             {['available', 'in_progress'].includes(module.status) && (
               <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '4px 8px', fontSize: 11 }}
                 disabled={refreshing} onClick={refreshLesson} title="Ask the AI to re-author this lesson">
@@ -723,6 +804,41 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
           {cur.key === 'big_picture' && (
             <Section title="Why this matters">
               <Segmented text={c.big_picture} />
+              {chapters.length > 0 && (
+                <div className="glass-inner" style={{ padding: 14, marginTop: 14 }}>
+                  <p style={{ fontSize: 11, fontWeight: 700, color: '#71717A', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+                    In this lesson{c.estimated_minutes ? ` · ≈${c.estimated_minutes} min` : ''}
+                  </p>
+                  <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {chapters.map((ch, i) => (
+                      <li key={i} style={{ fontSize: 13, color: '#D4D4D8', lineHeight: 1.5 }}>{ch.title || `Part ${i + 1}`}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </Section>
+          )}
+          {curChapter && (
+            <Section title={curChapter.title || `Part ${cur.ci + 1}`}>
+              {curChapter.image_topic && <TopicImage topic={curChapter.image_topic} />}
+              {curChapter.figure?.name && (
+                <div style={{ display: 'flex', gap: 14, marginBottom: 12, alignItems: 'flex-start' }}>
+                  <FigurePortrait name={curChapter.figure.name} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: '#FAFAFA', lineHeight: 1.2 }}>{curChapter.figure.name}</div>
+                    {curChapter.figure.era && <div style={{ fontSize: 12, color: TONES.textFaint, marginTop: 2 }}>{curChapter.figure.era}</div>}
+                    {curChapter.figure.caption && <p style={{ ...pStyle, fontSize: 12, marginTop: 6 }}>{curChapter.figure.caption}</p>}
+                  </div>
+                </div>
+              )}
+              <Segmented text={curChapter.body} />
+              {curChapter.diagram && <div style={{ marginTop: 14 }}><Diagram diagram={curChapter.diagram} /></div>}
+              {curChapter.key_takeaway && (
+                <div className="glass-inner" style={{ padding: 12, marginTop: 12, borderLeft: `3px solid ${TONES.violet}` }}>
+                  <span style={{ fontSize: 11, color: TONES.violet, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Key takeaway</span>
+                  <p style={{ ...pStyle, marginTop: 4 }}>{curChapter.key_takeaway}</p>
+                </div>
+              )}
             </Section>
           )}
           {cur.key === 'concept' && (
@@ -833,11 +949,19 @@ function LessonView({ moduleId, onClose, onProgress, onOpenProject }) {
               <p style={{ fontSize: 13, color: '#A1A1AA', marginBottom: 18 }}>
                 {mastered ? `+30 XP · ${c.citation || 'Grounded in the research.'}` : 'Pass the explain-back to master this module and earn 30 XP.'}
               </p>
+              {!c.project_brief && (
+                <p style={{ fontSize: 12, color: '#71717A', marginBottom: 14 }}>
+                  Study-only lesson — your next hands-on build unlocks at the checkpoint (every 5th lesson).
+                </p>
+              )}
               <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-                <button className="btn btn-primary" onClick={() => onOpenProject(module.id)}>
-                  <FiTarget size={14} /> Open the project
-                </button>
-                <button className="btn btn-ghost" onClick={async () => { await finishLesson(); onClose(); }}>Back to dashboard</button>
+                {c.project_brief && (
+                  <button className="btn btn-primary" onClick={() => onOpenProject(module.id)}>
+                    <FiTarget size={14} /> Open the project
+                  </button>
+                )}
+                <button className={c.project_brief ? 'btn btn-ghost' : 'btn btn-primary'}
+                  onClick={async () => { await finishLesson(); onClose(); }}>Back to dashboard</button>
               </div>
             </div>
           )}

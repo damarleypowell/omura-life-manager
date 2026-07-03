@@ -47,6 +47,11 @@ CONTENT_SCHEMA_VERSION = 3
 # In between, lessons go deeper instead — exercises stay, projects don't.
 PROJECT_EVERY_N_LESSONS = 5
 
+# Strict-QA bar: generate_to_standard() regenerates a lesson (feeding the
+# examiner's revision notes back in) until the combined score clears this.
+STRICT_QA_TARGET = 95
+STRICT_QA_MAX_ATTEMPTS = 3
+
 # The Tutor uses Sonnet (richer lesson generation) rather than the shared
 # Haiku default. Falls back to Gemini automatically if Anthropic is unavailable.
 TUTOR_MODEL = "claude-sonnet-4-6"
@@ -365,6 +370,237 @@ class TutorAI:
             return {"error": "No generated content to judge yet."}
         return self._ai_judge(module, content)
 
+    # ── Public: strict QA (deterministic auditor + harsh examiner) ──
+
+    def _deterministic_audit(self, content: Dict[str, Any], module: LearningModule,
+                             has_project: bool) -> Dict[str, Any]:
+        """Layer 1.5 — a code-level auditor the model cannot sweet-talk. Scores
+        0-100 by deducting points for every measurable shortfall of the v3 deep-
+        lesson contract. Returns the score plus the exact list of failures."""
+        fails: List[str] = []
+        lost = 0
+
+        def dock(points: int, msg: str) -> None:
+            nonlocal lost
+            lost += points
+            fails.append(f"[-{points}] {msg}")
+
+        chapters = content.get("chapters") or []
+        n = len(chapters)
+        if n < 5:
+            dock(25, f"only {n} chapters — the deep-lesson contract is 5-7")
+        elif n > 7:
+            dock(5, f"{n} chapters — cap is 7 (merge, don't pad)")
+
+        words = [len((ch.get("body") or "").split()) for ch in chapters]
+        total_words = sum(words)
+        short = [i + 1 for i, w in enumerate(words) if w < 250]
+        if short:
+            dock(min(20, 6 * len(short)), f"chapters under 250 words: {short} ({[words[i-1] for i in short]}w)")
+        if total_words < 1500 and n:
+            dock(15, f"total chapter body {total_words}w < 1500 — not a ~2-hour lesson")
+
+        figs = sum(1 for ch in chapters if ch.get("figure"))
+        digs = sum(1 for ch in chapters if ch.get("diagram"))
+        imgs = sum(1 for ch in chapters if ch.get("image_topic"))
+        if figs < 2:
+            dock(10, f"only {figs} chapter(s) with a historical figure — need >= 2")
+        if digs < 2:
+            dock(10, f"only {digs} chapter(s) with a diagram — need >= 2")
+        if imgs < 1:
+            dock(5, "no chapter has an image_topic — need >= 1")
+        missing_tk = [i + 1 for i, ch in enumerate(chapters) if not (ch.get("key_takeaway") or "").strip()]
+        if missing_tk:
+            dock(min(6, 2 * len(missing_tk)), f"chapters missing key_takeaway: {missing_tk}")
+
+        ex = content.get("exercises") or []
+        if not (3 <= len(ex) <= 5):
+            dock(8, f"{len(ex)} exercises — need 3-5")
+        ex_minutes = sum(int(e.get("minutes", 0) or 0) for e in ex if isinstance(e, dict))
+        if ex_minutes < 45:
+            dock(5, f"exercise load {ex_minutes} min < 45 — too light for a deep lesson")
+
+        quiz = content.get("quiz") or []
+        key = content.get("_quiz_key") or []
+        if len(quiz) < 5:
+            dock(15, f"only {len(quiz)} quiz questions — need >= 5")
+        if len(key) != len(quiz):
+            dock(15, f"answer key ({len(key)}) misaligned with quiz ({len(quiz)})")
+        bad_q = [
+            i + 1 for i, q in enumerate(quiz)
+            if not isinstance(q, dict) or not isinstance(q.get("options"), list)
+            or not (3 <= len(q["options"]) <= 4)
+            or (i < len(key) and not (0 <= int(key[i].get("answer_index", -1)) < len(q["options"])))
+        ]
+        if bad_q:
+            dock(10, f"malformed quiz items (options/answer index): {bad_q}")
+        if len(key) >= 4 and len({int(k.get("answer_index", 0)) for k in key}) == 1:
+            dock(6, "every quiz answer is the same option index — a guessable tell")
+
+        if not (content.get("explain_back_prompt") or "").strip():
+            dock(8, "missing explain_back_prompt")
+        if not (content.get("citation") or "").strip():
+            dock(5, "missing citation")
+        em = int(content.get("estimated_minutes") or 0)
+        if not (90 <= em <= 150):
+            dock(4, f"estimated_minutes {em} outside the 90-150 deep-lesson band")
+
+        pb = content.get("project_brief")
+        if has_project:
+            steps = (pb or {}).get("steps") or []
+            if not isinstance(pb, dict) or not pb:
+                dock(15, "checkpoint lesson is missing its project_brief")
+            else:
+                if not (3 <= len(steps) <= 6):
+                    dock(5, f"project has {len(steps)} steps — want 3-6")
+                rubric_pts = sum(int(r.get("max_points", 0) or 0) for r in (pb.get("rubric") or []))
+                if not (85 <= rubric_pts <= 115):
+                    dock(4, f"project rubric sums to {rubric_pts} — should be ~100")
+        elif pb:
+            dock(10, "study-only lesson carries a project_brief — cadence violation")
+
+        return {"score": max(0, 100 - lost), "failures": fails}
+
+    def _ai_strict_examiner(self, module: LearningModule,
+                            content: Dict[str, Any]) -> Dict[str, Any]:
+        """Layer 2+ — the harshest reviewer we can prompt: an external examiner
+        paid to find reasons to reject. Returns dimension scores, an overall,
+        and concrete revision_notes that feed the next generation attempt."""
+        system = (
+            "You are the external Quality Examiner for a premium course. You are paid to find "
+            "reasons to REJECT lessons, not to be nice. Grade like the toughest reviewer at a "
+            "top publisher: most drafts score 70-85; 90+ means you would put your own name on it; "
+            "95+ is reserved for exceptional work with zero weak sections. Never reward length — "
+            "reward precision, story, and correctness. Respond with valid JSON only."
+        )
+        prompt = (
+            f"Module: {module.title}\n"
+            f"Research basis the lesson MUST stay grounded in: {module.research_basis or 'n/a'}\n"
+            f"Stated confidence: {module.confidence_level}\n\n"
+            f"Lesson JSON:\n{self._public_content(content)}\n\n"
+            "Hunt specifically for: claims the research basis does not support; invented statistics "
+            "or overly-precise numbers with no source; historical anecdotes that sound apocryphal; "
+            "chapters that repeat each other or drift off the module's topic; filler sentences that "
+            "teach nothing; exercises that are vague reflection rather than concrete practice; quiz "
+            "questions answerable without reading the lesson or with giveaway options; a hook that "
+            "buries the point; missing failure-cases or limits of the evidence.\n\n"
+            "Respond with JSON: {\n"
+            '  "research_accuracy": 0-100, "pedagogical_soundness": 0-100, "specificity": 0-100,\n'
+            '  "assessment_validity": 0-100, "confidence_honesty": 0-100, "narrative_craft": 0-100,\n'
+            '  "actionability": 0-100,\n'
+            '  "overall": 0-100,  // your holistic verdict, NOT an average — one bad section caps it\n'
+            '  "verdict": "reject|revise|acceptable|excellent",\n'
+            '  "revision_notes": "numbered list of the SPECIFIC fixes needed, most damaging first, '
+            'each naming the chapter/section and exactly what to change (<= 250 words total)"\n'
+            "}"
+        )
+        result = call_claude_json(prompt, system, agent_name="tutor_ai_examiner",
+                                  temperature=0.15, max_tokens=1800, model=TUTOR_MODEL)
+        if isinstance(result, dict) and result.get("overall") is not None:
+            try:
+                result["overall"] = max(0, min(100, int(round(float(result["overall"])))))
+            except (TypeError, ValueError):
+                result["overall"] = 0
+            return result
+        return {"overall": None, "verdict": "unavailable",
+                "revision_notes": "", "notes": "examiner unavailable"}
+
+    def strict_quality_check(self, module: LearningModule,
+                             content: Dict[str, Any]) -> Dict[str, Any]:
+        """Combined strict QA: deterministic audit + harsh LLM examiner.
+
+        Combined score = 0.4*audit + 0.6*examiner, but a structurally broken
+        lesson (audit < 70) is capped at its audit score — the examiner cannot
+        rescue a lesson that violates the contract. If the examiner is offline,
+        the audit alone stands (honest, but flagged)."""
+        has_project = self.is_project_checkpoint(module)
+        audit = self._deterministic_audit(content, module, has_project)
+        exam = self._ai_strict_examiner(module, content)
+
+        if exam.get("overall") is None:
+            combined = audit["score"]
+            examiner_available = False
+        else:
+            combined = int(round(0.4 * audit["score"] + 0.6 * exam["overall"]))
+            if audit["score"] < 70:
+                combined = min(combined, audit["score"])
+            examiner_available = True
+
+        notes_parts = []
+        if audit["failures"]:
+            notes_parts.append("STRUCTURAL FAILURES (fix all):\n" + "\n".join(audit["failures"]))
+        if exam.get("revision_notes"):
+            notes_parts.append(str(exam["revision_notes"]))
+        return {
+            "overall": combined,
+            "audit_score": audit["score"],
+            "audit_failures": audit["failures"],
+            "examiner": exam,
+            "examiner_available": examiner_available,
+            "revision_notes": "\n\n".join(notes_parts),
+        }
+
+    def generate_to_standard(self, module_id: int,
+                             target: int = STRICT_QA_TARGET,
+                             max_attempts: int = STRICT_QA_MAX_ATTEMPTS) -> Dict[str, Any]:
+        """Author a lesson to the strict bar: generate, run the strict QA, feed
+        the revision notes back, and regenerate until the combined score clears
+        ``target`` (or attempts run out — then the best draft wins). The winning
+        draft is cached on the module exactly like generate_module_content."""
+        module = self.db.query(LearningModule).filter(LearningModule.id == module_id).first()
+        if not module:
+            return {"error": f"Module {module_id} not found"}
+
+        has_project = self.is_project_checkpoint(module)
+        num_questions = 6
+        best_content: Optional[Dict[str, Any]] = None
+        best_verdict: Optional[Dict[str, Any]] = None
+        history: List[Dict[str, Any]] = []
+        notes: Optional[str] = None
+
+        for attempt in range(1, max_attempts + 1):
+            raw = self._ai_generate_content(module, num_questions, has_project,
+                                            revision_notes=notes)
+            content = self._structural_validate(raw, module, num_questions, has_project)
+            verdict = self.strict_quality_check(module, content)
+            history.append({
+                "attempt": attempt,
+                "overall": verdict["overall"],
+                "audit_score": verdict["audit_score"],
+                "examiner_overall": (verdict["examiner"] or {}).get("overall"),
+                "examiner_verdict": (verdict["examiner"] or {}).get("verdict"),
+            })
+            self.logger.info(
+                f"strict QA [{module.phase_code or module.id}] attempt {attempt}: "
+                f"overall={verdict['overall']} audit={verdict['audit_score']}"
+            )
+            if best_verdict is None or verdict["overall"] > best_verdict["overall"]:
+                best_content, best_verdict = content, verdict
+            if verdict["overall"] >= target:
+                break
+            notes = verdict["revision_notes"] or None
+
+        # Persist the winning draft (same cache the normal path reads).
+        best_content = dict(best_content or {})
+        best_content["_qa_overall"] = best_verdict["overall"] if best_verdict else None
+        extra = dict(module.extra_data or {})
+        extra["generated_content"] = best_content
+        extra["gen_attempts"] = int(extra.get("gen_attempts", 0)) + len(history)
+        module.extra_data = extra
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
+        return {
+            "content": best_content,
+            "overall": best_verdict["overall"] if best_verdict else None,
+            "passed": bool(best_verdict and best_verdict["overall"] >= target),
+            "target": target,
+            "attempts": history,
+            "final_verdict": best_verdict,
+        }
+
     # ── Internal: module/track selection ────────────────────────────
 
     def _select_primary_module(self) -> Optional[LearningModule]:
@@ -648,7 +884,8 @@ class TutorAI:
     # ── Internal: AI calls (each with deterministic fallback) ───────
 
     def _ai_generate_content(self, module: LearningModule, num_questions: int,
-                             has_project: bool = True) -> Dict[str, Any]:
+                             has_project: bool = True,
+                             revision_notes: Optional[str] = None) -> Dict[str, Any]:
         system = (
             "You are the Tutor AI for Omura's Titan Track — a world-class teacher who makes hard "
             "ideas easy. You are writing ONE deep, self-contained ~2-hour masterclass lesson, built "
@@ -730,6 +967,12 @@ class TutorAI:
             f"{project_rule}"
             "Output ONLY the JSON object — no preamble, no markdown fence, no commentary. Ensure the JSON is complete and valid."
         )
+        if revision_notes:
+            prompt += (
+                "\n\nREVISION NOTES from the quality examiner on your previous draft — you MUST "
+                "address every point below in this rewrite (do not mention the notes in the output):\n"
+                f"{revision_notes}"
+            )
         result = call_claude_json(prompt, system, agent_name="tutor_ai",
                                   temperature=0.45, max_tokens=16000, model=TUTOR_MODEL)
         if not isinstance(result, dict):

@@ -67,6 +67,24 @@ def _call_anthropic(prompt: str, system_prompt: str, agent_name: str, temperatur
                 _logger.warning(f"[{agent_name}] {m} busy — retrying in {delay}s")
                 time.sleep(delay)
             try:
+                if max_tokens > 4096:
+                    # Long generations (e.g. 16k-token deep lessons) MUST
+                    # stream: a synchronous request that takes minutes hits the
+                    # 90s client timeout and then silently falls back to the
+                    # fast model — a whole course quietly authored by Haiku.
+                    # Streaming keeps bytes flowing, so the timeout only
+                    # applies between chunks, never to the total duration.
+                    with client.messages.stream(
+                        model=m,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": prompt}],
+                    ) as stream:
+                        text = "".join(stream.text_stream)
+                    if mi > 0:
+                        _logger.warning(f"[{agent_name}] fell back to {m}")
+                    return text
                 response = client.messages.create(
                     model=m,
                     max_tokens=max_tokens,

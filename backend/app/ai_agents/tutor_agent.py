@@ -467,31 +467,55 @@ class TutorAI:
         paid to find reasons to reject. Returns dimension scores, an overall,
         and concrete revision_notes that feed the next generation attempt."""
         system = (
-            "You are the external Quality Examiner for a premium course. You are paid to find "
-            "reasons to REJECT lessons, not to be nice. Grade like the toughest reviewer at a "
-            "top publisher: most drafts score 70-85; 90+ means you would put your own name on it; "
-            "95+ is reserved for exceptional work with zero weak sections. Never reward length — "
-            "reward precision, story, and correctness. Respond with valid JSON only."
+            "You are the Quality Examiner for a premium course. Your job is to protect the LEARNER: "
+            "the one question that governs every score is 'would a paying learner be MISLED by this "
+            "lesson, or taught the concept poorly?' You are demanding but fair — you fail real "
+            "problems hard and you do not manufacture work.\n\n"
+            "Separate MAJOR defects from MINOR polish, because they score differently:\n"
+            "MAJOR (these, and only these, pull a lesson below 88): a factual error; a claim the "
+            "research basis actually contradicts; a statistic invented or stated with false "
+            "precision AND not flagged as approximate; a quiz item answerable without reading or "
+            "with a giveaway/broken option; a chapter off-topic or duplicating another; a "
+            "confidence level dishonest about the evidence.\n"
+            "MINOR (note these, but they must NOT drop the score below 88): a distractor that could "
+            "be a little harder; a statistic that already carries a hedge or 'approximately' but "
+            "could add a range; a phrasing you'd word differently; a source you'd cite more fully "
+            "though the claim is sound; stylistic preference.\n\n"
+            "Hard rules that keep you honest:\n"
+            "- A claim the lesson ALREADY hedges, sources, or flags as contested/approximate/"
+            "illustrative is handled CORRECTLY. Do not penalize a hedge; a hedge is the right "
+            "response to uncertainty, not a flaw. Re-flagging it is a mistake on YOUR part.\n"
+            "- Do NOT deduct for a factual 'error' unless you are confident it is actually wrong. "
+            "If unsure, list it under 'verify' with ZERO deduction. Never invent a correction.\n"
+            "- Do not reward length. Do not grade on a curve or reserve scores by quota.\n\n"
+            "SCORING ANCHORS (use them literally):\n"
+            "97-100: nothing to fix; you'd publish as-is.\n"
+            "90-96: no MAJOR defects; only minor polish notes remain. THIS IS THE NORMAL SCORE FOR "
+            "A STRONG, HONEST, WELL-SOURCED LESSON — award it without hesitation.\n"
+            "75-89: exactly one MAJOR defect, or several minor ones clustered.\n"
+            "50-74: multiple MAJOR defects, or one that misleads on the core concept.\n"
+            "<50: pervasive errors or off-topic.\n"
+            "Respond with valid JSON only."
         )
         prompt = (
             f"Module: {module.title}\n"
             f"Research basis the lesson MUST stay grounded in: {module.research_basis or 'n/a'}\n"
             f"Stated confidence: {module.confidence_level}\n\n"
             f"Lesson JSON:\n{self._public_content(content)}\n\n"
-            "Hunt specifically for: claims the research basis does not support; invented statistics "
-            "or overly-precise numbers with no source; historical anecdotes that sound apocryphal; "
-            "chapters that repeat each other or drift off the module's topic; filler sentences that "
-            "teach nothing; exercises that are vague reflection rather than concrete practice; quiz "
-            "questions answerable without reading the lesson or with giveaway options; a hook that "
-            "buries the point; missing failure-cases or limits of the evidence.\n\n"
+            "Check for MAJOR defects first (unsupported claims; invented/false-precise UNHEDGED "
+            "statistics; apocryphal anecdotes stated as fact and NOT flagged; chapters that repeat "
+            "or drift; quiz items answerable without reading or with giveaway options; dishonest "
+            "confidence). Then note MINOR polish. Remember: anything the lesson already hedges or "
+            "sources is correct — do not re-penalize it.\n\n"
             "Respond with JSON: {\n"
             '  "research_accuracy": 0-100, "pedagogical_soundness": 0-100, "specificity": 0-100,\n'
             '  "assessment_validity": 0-100, "confidence_honesty": 0-100, "narrative_craft": 0-100,\n'
             '  "actionability": 0-100,\n'
-            '  "overall": 0-100,  // your holistic verdict, NOT an average — one bad section caps it\n'
+            '  "major_defects": ["..."],  // empty if none — these are what cap the score\n'
+            '  "overall": 0-100,  // set by the anchors above from the major/minor split\n'
             '  "verdict": "reject|revise|acceptable|excellent",\n'
-            '  "revision_notes": "numbered list of the SPECIFIC fixes needed, most damaging first, '
-            'each naming the chapter/section and exactly what to change (<= 250 words total)"\n'
+            '  "revision_notes": "numbered list, MAJOR fixes first then minor, each naming the '
+            'chapter/section and exact change; mark each [MAJOR] or [minor] (<= 250 words)"\n'
             "}"
         )
         result = call_claude_json(prompt, system, agent_name="tutor_ai_examiner",
